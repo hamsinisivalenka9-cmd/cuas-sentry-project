@@ -1,0 +1,659 @@
+=========================================================
+PROJECT CHECKPOINT
+=========================================================
+
+Stage Number:   4
+Stage Name:     Relational Database Architecture Design
+Objective:      Using everything learned in Stages 1-3, design a complete,
+                normalized-but-not-overengineered SQLite schema for the
+                project's sensor data -- documented in full detail, with
+                every primary key, foreign key, and table grain justified
+                by real evidence -- without writing any schema.sql,
+                database file, or ETL code.
+Status:         Complete (documentation only; implementation is Stage 5)
+Generated:      2026-08-05
+
+This summary was generated retrospectively from verified project artifacts.
+
+SOURCES USED: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md,
+docs/KEY_ANALYSIS.md, data/output/mcap_schema_report.json,
+data/output/key_analysis.json, and a small number of additional read-only,
+full-dataset queries run directly against data/input/sanitized.mcap during
+this stage specifically to resolve two open questions (detailed below).
+This stage's own four output documents (docs/DATABASE_DESIGN.md,
+docs/TABLE_GRAIN.md, docs/NORMALIZATION_DECISIONS.md, docs/ERD.md) are
+also a primary source for this summary, since they contain the full detail
+this document only summarizes.
+
+=========================================================
+WHY THIS STAGE EXISTS
+=========================================================
+
+Stages 1-3 spent real effort making sure nothing about this project's
+database would be designed from guesswork: Stage 1 confirmed the tools
+worked, Stage 2 mapped out what the source file actually contains, and
+Stage 3 proved, field by field, which identifiers are trustworthy and
+which same-named fields across topics are actually related. All of that
+work exists to feed into exactly one moment: the point where actual
+tables, keys, and relationships get decided. This stage is that moment.
+
+This could not safely be skipped, and could not safely be rushed, because
+a database schema is one of the most expensive things to redesign after
+the fact -- once an ETL pipeline is loading real rows into real tables
+with real foreign-key constraints, changing the grain of a table or
+swapping a primary key touches every piece of code and every query built
+on top of it. CLAUDE.md's rules exist specifically to prevent this kind of
+costly rework: rule 6 requires every table's grain to be explicit up
+front, rule 7 requires keys to be justified by evidence rather than
+convention, and rule 14 forbids hard-coding the analytical answers the
+schema is supposed to help compute honestly. Skipping straight to writing
+schema.sql, without this documentation step, would have risked repeating
+the exact kind of unjustified, name-based assumption Stage 3 was built to
+catch -- just one level further downstream, in a place (a live database
+schema) that is much harder to walk back.
+
+=========================================================
+WHAT WE ACCOMPLISHED
+=========================================================
+
+This stage happened in three rounds, each one narrowing and correcting the
+last -- itself a good illustration of why design review before
+implementation matters.
+
+1. First proposal: a ~28-32 table, fully-normalized design.
+   What was done: every genuinely repeated nested protobuf structure
+   across all four topics was mapped to its own table -- per-topic frame
+   tables, a child table for every repeated field under track_states
+   (which alone has over a dozen), enum lookup tables, and so on.
+   Why: this is what "textbook" normalization looks like when applied
+   mechanically to a schema this deeply nested.
+   What was learned: the user's review correctly identified this as too
+   complex for the assessment's actual goal -- readable, maintainable,
+   analytically useful, not maximally normalized. This was a real, useful
+   course correction, not a rejection of the underlying analysis; every
+   fact discovered in the first pass was still valid, just organized at
+   the wrong altitude.
+
+2. Second proposal: a compact, ~10-table redesign.
+   What was done: the architecture was rebuilt around a much stricter
+   test -- only create a separate table for something that is a distinct
+   entity, a time-series history, a genuine many-to-many relationship, or
+   repeated data actually needed by one of the six required analytical
+   queries. Structures that were confirmed always-empty, or that would add
+   a join without analytical value, were flattened, stored as compact
+   JSON, or omitted outright, each with a documented reason.
+   Why: to directly satisfy the explicit requirement that another engineer
+   should be able to understand the schema quickly.
+   What was learned: a 10-table design, closely following a compact model
+   the user sketched directly, could still support every one of the six
+   required analytical questions with at most two table joins each -- the
+   complexity reduction did not cost analytical power.
+
+3. Third round: four specific issues investigated with real evidence
+   before the design was finalized (each covered in detail in its own
+   section below): the CV-incorporation percentage discrepancy, two
+   candidate self-referencing relationships that Stage 3 could not
+   confirm, whether to store derived track-duration timestamps, and how to
+   handle one remaining repeated nested field (measurement-to-detection
+   links).
+   What was done: rather than resolve these by design-time judgment alone,
+   several new, full-dataset, read-only queries were run directly against
+   the real source file (never modified -- see Validation below) to settle
+   each question with evidence.
+   What was learned: this produced the single most important finding of
+   the whole stage -- see "What We Discovered" below.
+
+4. Wrote the four full design documents plus this summary, then ran a
+   consistency pass across all of them to make sure table names, primary
+   keys, foreign keys, grains, and row-count estimates match exactly
+   everywhere they are repeated.
+
+=========================================================
+WHAT WE DISCOVERED
+=========================================================
+
+- The CV detection-incorporation percentage in this file is genuinely
+  higher than the project's ~81% approximate target -- not lower, and not
+  close. Every field that could plausibly serve as the association source
+  was enumerated directly from the real protobuf schema (not assumed):
+  the only one that exists is `last_associated_detection_id`. Counting
+  distinct detections referenced by it gives 1,868 of 1,911, or 97.75%. A
+  second, independent field on the same message -- a cumulative counter
+  called `num_detection_associations`, not previously analyzed in Stage
+  2/3 -- was checked as a cross-validation and points to an even higher
+  figure, effectively 99.9%. No filter on either the detection side
+  (disposition, suppression flags) or the track side (status) that could
+  be justified by real data brought the number down toward 81%.
+  Why it matters: this is now a clearly documented, evidence-backed,
+  unresolved discrepancy -- not a bug in this project's analysis, and not
+  something papered over with an invented filter to make the numbers
+  match. Whoever answers this question next has concrete numbers and a
+  concrete methodology to start from, and an explicit warning not to
+  assume the ~81% target was simply "the right answer this data should
+  produce."
+
+- The fused-track classification system cannot represent "Drone" or
+  "Airplane" at all, as a matter of schema design, not just missing data.
+  Every value of the `proto.tower.TrackObjectClass` enum (the type used by
+  the "fused" track_states topic, the one CLAUDE.md's duration question is
+  really about) was read directly from the protobuf descriptor: none of
+  them is named anything like DRONE or AIRPLANE. Separately, even the
+  richer CV classification enum, which does define explicit DRONE and
+  AIRPLANE values, was checked against what this file actually contains --
+  and neither value is ever used; every CV track in this file is
+  classified only as the more generic AIR_VEHICLE or BIRD.
+  Why it matters: this means the second of CLAUDE.md's two target
+  analytical questions cannot currently be answered honestly from this
+  file at all, for two independent reasons, not one. This needed to be
+  discovered and documented now, before an ETL stage tried to compute an
+  average duration for a classification that either doesn't exist in the
+  schema or was never used in the data.
+
+- A systemic pattern first seen in Stage 2 -- fields that are structurally
+  present but always empty -- continued to hold up under the much more
+  targeted checks run in this stage: CV detection disposition, radar
+  object classification, and fused track_quality were all confirmed, via
+  full-dataset queries, to be constant/empty across every single row.
+  Why it matters: this ruled out several tempting-looking filters that
+  might otherwise have been used (incorrectly) to try to explain the 81%
+  discrepancy, and confirms the schema's decision to keep these as
+  nullable columns rather than build any logic around them.
+
+- Two genuinely repeated structures survived close evaluation and still
+  did not become separate tables: `track_states.sensors` turned out to be
+  a near-duplicate of the `measurements` structure already modeled
+  (both describe sensor involvement in a fused-track update), and the
+  radar `cluster` self-referencing structure was confirmed to be always
+  empty, with no identifier field on the underlying message that a
+  self-referencing key could even point to.
+  Why it matters: this is direct, checked evidence that the compact design
+  is not simply "the simpler option was chosen without looking" -- each
+  omission was specifically investigated and is defensible.
+
+=========================================================
+ENGINEERING DECISIONS
+=========================================================
+
+Decision: Investigate the 81% discrepancy with real, full-dataset queries
+before finalizing any table, rather than accept the first plausible number
+computed.
+Reason: the user's explicit instruction was not to finalize the bridge
+table or claim the question solved until the discrepancy was understood --
+and, separately, this is simply good practice: a percentage this far off
+from the expected target (97.8%-99.9% vs. ~81%) is a signal worth chasing
+down, not rounding away.
+Alternative considered: report the 97.8% figure as "the" answer and move
+on, noting the target was "approximate" anyway.
+Why the chosen approach is better: the investigation surfaced a second,
+independent field (`num_detection_associations`) that had not been
+examined in Stage 2/3 at all, and definitively ruled out several plausible
+explanations (denominator filtering, numerator filtering) rather than
+leaving them as untested guesses. This turns "the number doesn't match"
+into a specific, well-evidenced, actionable open question instead of a
+shrug.
+Future impact: whoever picks up the ETL stage does not need to re-derive
+this investigation from scratch -- the methodology, the fields checked,
+and the reasons each alternative was ruled out are all documented in
+docs/DATABASE_DESIGN.md Section 2.
+
+Decision: Do not enforce parent_object_track_id, the radar cluster
+structure, or radar_detections.track_id as foreign keys.
+Reason: direct instruction, backed by Stage 3 evidence -- each of these
+was already classified as either unconfirmed ("weak heuristic"), entirely
+unpopulated, or actively rejected (zero value overlap even where types
+matched).
+Alternative considered: enforce them anyway, since the columns exist and
+"look like" foreign keys by name.
+Why the chosen approach is better: CLAUDE.md rule 8 requires foreign-key
+enforcement to actually be turned on; enforcing a relationship the real
+data does not support would either make otherwise-valid rows fail to load,
+or require silently coercing/faking data to satisfy a constraint that was
+never actually justified -- the opposite of rule 7's "keys only when
+justified."
+Future impact: the schema is safe to load real data into with foreign
+keys fully enabled, without any of these three columns causing a load
+failure or requiring a workaround.
+
+Decision: Do not store first-observed time, last-observed time, or
+duration as columns on the persistent-entity tables (cv_tracks,
+fused_tracks); describe MIN/MAX-based views instead.
+Reason: direct instruction, for a sound reason -- these tables' underlying
+state-history tables are append-only and keep growing, so a stored
+duration would need constant re-computation to stay correct, and any gap
+in that re-computation creates a duplicated fact that has silently gone
+stale.
+Alternative considered: store these as columns anyway, refreshed by a
+scheduled job or trigger.
+Why the chosen approach is better: a view recomputes from the current
+state rows every single time it is queried, so the derived fact can never
+disagree with its source, by construction -- no refresh job to forget to
+run, no trigger to get out of sync.
+Future impact: the eventual ETL/implementation stage has two named,
+described views (v_cv_track_summary, v_fused_track_summary) ready to
+create, with the SQL shown as illustrative documentation, not yet
+implemented.
+
+Decision: Store the repeated measurement-to-detection links as compact
+JSON on the fused_track_measurements table, not as an eleventh bridge
+table.
+Reason: none of the six required analytical queries need a relational
+join on these specific ids; adding a table for a two-levels-deep link with
+no current requirement would directly contradict the "no joins without
+analytical value" instruction for this stage.
+Alternative considered: build fused_measurement_detection_links as a full
+bridge table, matching the pattern used for cv_detection_track_links.
+Why the chosen approach is better: cv_detection_track_links exists because
+Stage 3 explicitly proved that exact relationship was needed for a
+required analytical question; this one has not been shown to be needed
+yet, and the JSON approach preserves full fidelity so nothing is lost by
+waiting.
+Future impact: documented upgrade path -- if a future stage needs to
+analyze which specific CV detections fed into fused-track measurements,
+the JSON can be promoted into a real table with no data loss, since the
+JSON already holds everything a bridge table would.
+
+=========================================================
+FOLLOW-UP PROMPTS AND COURSE CORRECTIONS
+=========================================================
+
+1. "The current proposal of approximately 28-32 tables is too normalized
+   and too complex... Redesign the architecture for simplicity... Target
+   approximately 8-12 core tables."
+   What prompted it: the first, fully-normalized proposal, reviewed by the
+   user.
+   What problem it fixed: a technically defensible but hard-to-read design
+   that would not have met the assessment's actual goal (another engineer
+   should be able to understand it quickly).
+   How it improved the project: forced an explicit test for every table
+   ("does this represent a distinct entity, a history, a many-to-many
+   relationship, or analytically-needed repeated data?") rather than
+   "does this repeated protobuf structure exist" -- a meaningfully
+   different and better question for this project's actual goal.
+   What changed: the entire architecture was rebuilt from ~30 tables down
+   to 10, before any of the four Stage 4 documents were written.
+
+2. "Revise the plan once more... Address these four issues" (the CV-
+   incorporation discrepancy, the two unsupported self-FKs, derived
+   persistent-track timestamps, and the repeated measurement-detection
+   links).
+   What prompted it: a review of the compact 10-table proposal that
+   correctly identified one table (cv_detection_track_links) as not yet
+   properly justified by evidence, two relationships that had been
+   proposed as enforced foreign keys despite Stage 3 evidence against
+   them, a design pattern (stored duration) that risked going stale, and
+   one remaining repeated structure whose fate hadn't been explicitly
+   decided.
+   What problem it fixed: each of these was a real gap between "looks
+   reasonable" and "is actually justified by the evidence this project
+   has already gathered" -- exactly the standard Stage 3 was built to
+   enforce, now being applied to the schema itself.
+   How it improved the project: produced the CV-incorporation and
+   classification-mismatch investigations described in "What We
+   Discovered" above, which are now the most substantively important
+   findings of this stage; also resulted in the explicit JSON-vs-bridge-
+   table trade-off analysis for the one remaining ambiguous structure.
+   What changed: no files existed yet at this point (still in the
+   planning/approval phase) -- this shaped the content of all four Stage
+   4 documents from their first draft, rather than requiring a rewrite
+   after the fact.
+
+=========================================================
+FILES CREATED
+=========================================================
+
+docs/DATABASE_DESIGN.md
+  Purpose: the complete, authoritative schema design -- all 10 tables in
+  full detail (columns, types, keys, constraints, indexes, loading order,
+  cleaning rules), plus the two investigated discrepancies, alternative
+  designs considered, the cleaning plan, analytical-query support, and
+  performance discussion.
+  Inputs: docs/MCAP_INSPECTION.md, docs/KEY_ANALYSIS.md, both JSON
+  reports, CLAUDE.md/AGENTS.md, and the new Stage 4 investigative queries.
+  Outputs: none (this is itself the output).
+  Generated or handwritten: handwritten (prose and tables), incorporating
+  programmatically-verified facts.
+  Should it be committed to git: yes -- design documentation, not raw
+  source data or a generated database.
+  Will it be reused later: yes -- this is the direct blueprint for the
+  eventual schema.sql and ETL implementation stage.
+
+docs/TABLE_GRAIN.md
+  Purpose: a concise, quick-reference companion stating every table's
+  exact "one row represents..." grain and row count in one place, without
+  repeating the full column-level detail.
+  Inputs: docs/DATABASE_DESIGN.md.
+  Outputs: none.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes.
+  Will it be reused later: yes -- intended as the fast lookup reference
+  during ETL implementation, when a quick grain check is needed without
+  opening the full design document.
+
+docs/NORMALIZATION_DECISIONS.md
+  Purpose: explains, structure by structure, how every repeated/nested
+  protobuf field found in Stage 2 was handled -- turned into a table,
+  flattened, stored as JSON, or omitted -- and why; covers 1NF/2NF/3NF,
+  the table taxonomy used, and why the design does not go further.
+  Inputs: docs/DATABASE_DESIGN.md, docs/MCAP_INSPECTION.md.
+  Outputs: none.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes.
+  Will it be reused later: yes -- the reference for defending any "why
+  isn't X its own table" question later in the project.
+
+docs/ERD.md
+  Purpose: a Mermaid entity-relationship diagram of all 10 tables, with
+  primary keys, foreign keys, and cardinalities, plus an explicit list of
+  candidate relationships considered and deliberately not drawn.
+  Inputs: docs/DATABASE_DESIGN.md.
+  Outputs: none.
+  Generated or handwritten: handwritten (Mermaid syntax).
+  Should it be committed to git: yes.
+  Will it be reused later: yes -- a visual reference for anyone joining
+  the project, and a direct check against schema.sql once it exists (do
+  the actual foreign keys match this diagram?).
+
+docs/STAGE_04_SUMMARY.txt
+  Purpose: this document -- the Stage 4 engineering journal entry, in the
+  same format used for Stages 1-3.
+  Inputs: the four documents above, CLAUDE.md/AGENTS.md, prior stage
+  summaries.
+  Outputs: none.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes.
+  Will it be reused later: yes, as part of docs/PROJECT_TIMELINE.txt if
+  that document is later extended to cover this stage.
+
+=========================================================
+VALIDATION
+=========================================================
+
+- Direct protobuf reflection, not memory or assumption, was used to
+  confirm every enum value name cited in this stage's two key findings
+  (the CV-incorporation investigation and the classification-mismatch
+  investigation) -- including catching and correcting one of the author's
+  own earlier, incorrect recollections of an enum's value ordering before
+  it was written into any document. This matters because the whole point
+  of this stage's rigor is not repeating exactly this kind of
+  memory-based error.
+
+- Every population statistic newly claimed in this stage (as opposed to
+  carried over from Stage 2/3) was checked with a fresh, full-dataset,
+  read-only query against the real 57,266-message file -- not estimated
+  or assumed from a sample. Each such figure is explicitly labeled
+  CONFIRMED with its source in docs/DATABASE_DESIGN.md, and figures that
+  were not independently re-verified this way are explicitly labeled
+  ASSUMPTION instead, so a reader never has to guess which is which.
+
+- A cross-document consistency check was run after all four design
+  documents were written, specifically checking that table names, primary
+  keys, foreign keys, grain statements, and row-count figures match
+  exactly everywhere they are repeated across docs/DATABASE_DESIGN.md,
+  docs/TABLE_GRAIN.md, docs/NORMALIZATION_DECISIONS.md, and docs/ERD.md.
+  This matters because these four documents intentionally restate the
+  same facts from different angles (full detail, quick reference,
+  normalization reasoning, visual diagram) -- a mismatch between them
+  would be exactly the kind of quiet inconsistency this project has
+  worked hard to avoid at every earlier stage.
+
+- The source file's read-only status was preserved throughout -- every
+  investigative query in this stage opened data/input/sanitized.mcap in
+  binary read-only mode only, the same discipline enforced in every prior
+  stage.
+
+=========================================================
+WHAT WE INTENTIONALLY DID NOT DO
+=========================================================
+
+- Did not create schema.sql, a SQLite database file, any ETL/loader code,
+  or any analytical SQL views -- explicit instruction for this stage, and
+  consistent with CLAUDE.md rule 17 (SQLite pipeline work follows the
+  design, not the other way around).
+
+- Did not resolve the CV-incorporation percentage discrepancy or the
+  Drone/Airplane classification question. Both are deliberately left
+  documented as open, unresolved questions requiring human or
+  business-rule input -- not something a schema design stage should
+  invent an answer to.
+
+- Did not enforce any relationship Stage 3 rejected or could not confirm,
+  even where a plausible-looking column name existed.
+
+- Did not add columns, tables, or constraints beyond what evidence and the
+  six required analytical queries justified -- several tempting
+  additions (a full position/velocity/covariance model for fused tracks,
+  a complete radar debug-metadata model, per-topic frame tables) were
+  explicitly considered and rejected in docs/NORMALIZATION_DECISIONS.md,
+  not simply never thought of.
+
+These were postponed or omitted because this stage's job was specifically
+to produce a justified, evidence-backed design -- not a working pipeline,
+and not a design padded with speculative future-proofing beyond what the
+actual data and actual required queries support.
+
+=========================================================
+RISKS OR OPEN QUESTIONS
+=========================================================
+
+- The ~81% CV-incorporation target and the Drone/Airplane duration
+  question remain genuinely unresolved (see "What We Discovered" above)
+  and are the most significant open risks carried out of this stage --
+  the eventual ETL/reporting stage should not treat either as solved.
+
+- Several population claims in the new column specifications
+  (`capture_time_ns` across all three batch topics; a few
+  `track_states`-side enum fields) are explicitly marked ASSUMPTION,
+  based on Stage 2's 3-sample structural observation rather than a fresh
+  full-dataset scan in this stage -- these should be spot-checked during
+  ETL implementation before being relied upon as reliably populated.
+
+- All of this stage's findings, like every prior stage's, describe one
+  sanitized recording session. Whether the same table design, the same
+  always-empty fields, or the same discrepancies would hold for a
+  different source file was not and cannot be tested here.
+
+- This design has not yet been implemented or tested against a real
+  SQLite database -- no `PRAGMA foreign_keys = ON` load has actually been
+  attempted, so while every constraint is evidence-justified on paper,
+  the first real load in Stage 5 is still the first genuine test of
+  whether the design holds up in practice.
+
+=========================================================
+WHAT HAPPENS NEXT
+=========================================================
+
+Stage 5 (not yet started) is where CLAUDE.md's instructions call for the
+actual schema.sql, the ETL pipeline, and the populated
+data/output/sentry.db to be built, following this stage's design exactly.
+We are ready for it because every table, key, and relationship in this
+design is traceable to specific Stage 2/3/4 evidence, and every open
+question (the two unresolved analytical discrepancies, the ASSUMPTION-
+tagged population claims) is explicitly flagged rather than hidden.
+Expected inputs to Stage 5: the four design documents from this stage, the
+source MCAP file, and the two prior JSON reports. Expected outputs: a
+working, idempotent ETL pipeline (CLAUDE.md rule 11), a populated SQLite
+database with foreign-key enforcement turned on (rule 8), and the two
+recommended views actually created. A known risk heading into Stage 5:
+the 4 confirmed orphaned detection references and the always-empty
+sanitized fields both require the specific, deliberate handling this
+stage documented (reject-and-log; retain-as-nullable) to be implemented
+correctly, not simply defaulted past.
+
+=========================================================
+INTERVIEW EXPLANATION
+=========================================================
+
+"By the time I got to actually designing the database, I'd already done
+two rounds of investigation into the real data, so my first instinct was
+to be thorough -- I mapped essentially every repeated structure in the
+protobuf schema to its own table, which got me to around thirty tables.
+That was technically defensible, but when I got feedback that it was too
+complex for what this was supposed to be -- a clean, readable design
+another engineer could understand quickly -- I didn't just trim a few
+tables, I changed the test I was applying. Instead of asking 'does this
+repeated structure exist,' I started asking 'does this represent a real
+entity, a real history, a real many-to-many relationship, or data
+actually needed for one of the required queries.' That got me down to ten
+tables without losing any analytical power -- every required query still
+only needs one or two joins. But the part I think mattered most happened
+after that: before I'd let myself finalize the one table everyone would
+actually care about -- the bridge table linking detections to tracks -- I
+went back to the real data one more time, because the number it produced,
+about 98%, didn't match the project's own expected answer of about 81%.
+I could have just noted the difference and moved on, but instead I
+actually enumerated every field on the track message directly from the
+protobuf schema to make sure I wasn't missing another way detections get
+linked to tracks, and I found a second field, a cumulative counter, that
+nobody had looked at yet. It agreed with my first number, not with the
+target -- which told me the discrepancy was real, not a bug in my
+analysis, and I documented it as an open question instead of quietly
+forcing my design to produce 81%. I did the same thing for the second
+analytical question in the brief, about drone versus airplane duration --
+and found that the fused-tracking system's own classification scheme
+literally doesn't have a category for drone or airplane, it only has
+broader categories like 'air vehicle.' That's the kind of finding you can
+only get by actually going back to the source data with a specific
+question, instead of trusting that the schema will obviously support
+whatever the assignment brief assumed it would."
+
+=========================================================
+BEGINNER TAKEAWAYS
+=========================================================
+
+- "Normalization" is not an all-or-nothing property -- it's a spectrum,
+  and more normalized is not automatically better. A textbook-perfect,
+  fully-normalized design can be genuinely worse for a specific project if
+  it becomes too complex for the people who have to build and query it to
+  understand quickly. Good database design means picking the right amount
+  of normalization for the actual job, not the maximum possible amount.
+
+- A "grain" (what one row represents) and a "surrogate key" (a made-up id
+  column, usually just a counting number, added purely to guarantee
+  uniqueness) are two of the most important, and most permanent,
+  decisions in any database design. This project consistently preferred a
+  surrogate key over a natural one whenever there was any real doubt about
+  whether the natural option would stay unique forever -- because
+  discovering later that a "unique" natural key wasn't actually unique
+  can break a database in a way that's very hard to fix after real data
+  has been loaded.
+
+- A "view" is a saved SQL query that looks like a table when you query it,
+  but doesn't actually store any data of its own -- every time you ask it
+  a question, it recalculates the answer from the real tables underneath.
+  This project chose to compute things like "how long has this track been
+  observed" using a view instead of storing that number directly, because
+  a stored number has to be actively kept up to date every time new data
+  arrives, while a view is automatically always correct, because it's
+  recalculated fresh every time.
+
+- Just because a question sounds simple in a project brief -- "what
+  percentage of detections became tracks" -- does not mean the raw data
+  contains one, unambiguous way to compute it. This stage found at least
+  two structurally different but both-defensible ways to compute that
+  exact percentage, producing different numbers, neither of which matched
+  the brief's own expected answer. Recognizing that kind of ambiguity, and
+  documenting it honestly instead of picking whichever number looks
+  right, is a core, real skill in data engineering -- not a failure to
+  find "the" answer.
+
+- An "enum" (short for enumeration) is a fixed, predefined list of
+  allowed values for a field -- like a multiple-choice question instead
+  of free text. This project discovered that two different parts of the
+  same data used two different enums for "what kind of object is this,"
+  and one of those enums simply didn't include the specific options
+  ("drone," "airplane") the project needed -- a good example of how a
+  seemingly small schema detail, several layers deep in someone else's
+  data format, can completely block a question you want to ask of it.
+
+=========================================================
+EXECUTIVE SUMMARY
+=========================================================
+
+Building on three prior stages of environment verification, structural
+inspection, and identifier analysis, this stage designed the project's
+complete relational database schema: 10 tables, each with an explicit
+grain, evidence-justified primary and foreign keys, and a clear reason for
+existing (or, for several considered-and-rejected alternatives, a clear
+reason for not existing). The design went through two full revisions
+based on review -- first cut from roughly 30 tables to 10 for readability
+and analytical simplicity, then refined again to remove two
+unenforceable foreign-key relationships, replace stored (and
+inevitably-staleness-prone) duration columns with recomputing views, and
+settle a JSON-versus-bridge-table trade-off with a documented, reversible
+decision. Along the way, this stage's most substantive work was a real
+data investigation, not a design exercise: verifying, against the full
+57,266-message source file and via direct protobuf reflection (not
+memory), that the project's expected "~81% of detections incorporated
+into tracks" validation target is not reproduced by any evidence-supported
+method (the real figure is 97.8%-99.9%), and that the project's second
+target question, comparing drone and airplane track durations, currently
+cannot be answered at all -- not because of missing data, but because the
+relevant classification system's enum has no such categories, and even
+the richer system that does never actually uses them in this file. Both
+findings are documented prominently and left unresolved, exactly as
+instructed, rather than papered over to make the numbers match
+expectations. No schema.sql, database, or ETL code was written -- this
+stage produced documentation only, ready to be implemented, reviewed, and
+tested in the next stage.
+
+=========================================================
+PROJECT STATE
+=========================================================
+
+Files created:
+  docs/DATABASE_DESIGN.md
+  docs/TABLE_GRAIN.md
+  docs/NORMALIZATION_DECISIONS.md
+  docs/ERD.md
+  docs/STAGE_04_SUMMARY.txt
+
+Files modified:               None.
+
+Commands executed (verifiable from terminal history):
+  - Several read-only Python scripts run inline via the venv interpreter
+    against data/input/sanitized.mcap, decoding cv_tracks, cv_detections,
+    radar_detections, and track_states topics to check, at full-dataset
+    scale: every field name on the CVTrack message; the
+    num_detection_associations distribution per persistent track;
+    cv_detections.disposition and static_suppression_label distributions;
+    cv_tracks.status/status_code distributions; the exact
+    fused_track_measurements row count; cv_tracks/track_states/radar
+    object-classification enum value distributions, resolved directly
+    from the protobuf descriptor rather than from memory; and the radar
+    cluster field's population (confirmed always empty) plus radar_type
+    and object_type.class population.
+  - A cross-document consistency check comparing table names, keys,
+    grains, and row-count figures across all four design documents.
+
+Tests executed:                None -- this stage produced no code to
+                                test; the existing 69-test suite from
+                                Stages 2-3 was not affected and was not
+                                re-run as part of this stage's work.
+
+Validation results:            Every population/enum claim newly
+                                introduced in this stage was checked
+                                against the real, full 57,266-message file
+                                and is cited in docs/DATABASE_DESIGN.md;
+                                the cross-document consistency check found
+                                table names, keys, grains, and row counts
+                                aligned across all four documents.
+
+Git status at end of stage:    The five files above are new since Stage
+                                3's work (itself still uncommitted as of
+                                this writing, per docs/STAGE_03_SUMMARY.txt).
+                                No commit was made during this session.
+
+Recommended git commit message:
+  "Add Stage 4 relational database design documentation
+
+  Adds docs/DATABASE_DESIGN.md, docs/TABLE_GRAIN.md,
+  docs/NORMALIZATION_DECISIONS.md, and docs/ERD.md, documenting a compact,
+  10-table SQLite schema derived from the Stage 2/3 structural and key
+  analysis. Every primary key, foreign key, and table grain is justified
+  by cited evidence; three candidate relationships Stage 3 could not
+  confirm are explicitly left unenforced. Investigates and documents two
+  unresolved analytical discrepancies: the CV detection-incorporation
+  percentage (real data: 97.8%-99.9%, vs. the assignment's ~81% target)
+  and the fused-track Drone/Airplane classification question (the
+  relevant enum has no such values). No schema.sql, database, or ETL code
+  is included -- documentation only."

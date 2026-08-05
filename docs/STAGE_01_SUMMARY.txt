@@ -1,0 +1,488 @@
+=========================================================
+PROJECT CHECKPOINT
+=========================================================
+
+Stage Number:   1
+Stage Name:     Environment and Prerequisite Verification
+Objective:      Confirm that the local machine, the Python environment, and
+                the source data file are actually ready for engineering
+                work, before any inspection code or database code is written.
+Status:         Complete
+Generated:      2026-08-05
+
+This summary was generated retrospectively from verified project artifacts.
+
+NOTE ON SOURCES: This stage produced no files of its own (see "FILES
+CREATED" below). Everything in this document is reconstructed from the
+terminal command output that was still visible in the working session, plus
+the current state of the repository (CLAUDE.md, AGENTS.md, .gitignore,
+requirements.txt, and the actual contents of data/input/). Where a detail
+could not be re-verified against something still on disk or in the visible
+terminal history, this document says so explicitly instead of guessing.
+
+=========================================================
+WHY THIS STAGE EXISTS
+=========================================================
+
+Before explaining what this stage did, it helps to explain what the whole
+project is trying to do. According to CLAUDE.md and AGENTS.md (two files in
+the project root that both contain the same project instructions), the goal
+is to build a Python program that reads a file full of sensor data
+(data/input/sanitized.mcap) and loads it into a local database
+(data/output/sentry.db) so that simple questions can be asked of it with
+SQL, such as "what percentage of camera detections turned into tracked
+objects?"
+
+That end goal involves several risky, hard-to-reverse steps later on:
+writing a database schema, writing code that reads and deletes/rebuilds
+that database, and writing code that parses a specialized binary file
+format. None of that should be attempted on a machine that might not even
+have the right tools installed, or against a source file that might not
+exist, might be corrupted, or might not be safely readable.
+
+Stage 1 exists to answer one question with certainty before any other work
+begins: "Can we even do this, on this machine, right now?" Specifically it
+checks:
+
+- Does the source data file actually exist at the path the project expects?
+- Is that file protected from being accidentally committed to git (since
+  CLAUDE.md rule #2 says the source file and the generated database must
+  never be committed)?
+- Is there a working Python installation, and a project-specific virtual
+  environment (a private, isolated copy of Python and its packages, so this
+  project's dependencies do not interfere with anything else on the
+  machine)?
+- Are the specific third-party libraries this project depends on
+  (mcap, mcap-protobuf-support, protobuf, pytest) actually installed in
+  that environment?
+- Does Python's built-in database module (sqlite3) work at all on this
+  machine?
+- Can the source file be opened in a safe, read-only way without writing to
+  it?
+
+This could not safely be skipped because CLAUDE.md rule #1 is "Never
+modify, delete, rename, move, or overwrite the source MCAP file." The
+source file is the only copy of the raw sensor data available to this
+project. If later stages had assumed the file existed, or assumed a package
+was installed, or assumed sqlite3 worked, and any of those assumptions had
+been wrong, the failure could have happened in the middle of a file-writing
+operation -- which is exactly the situation where a source file is most at
+risk of being damaged. Verifying everything read-only, up front, in a
+dedicated stage, means every later stage can build on a known-good
+foundation instead of discovering a missing dependency halfway through a
+database rebuild.
+
+If this stage had been skipped, the risks would have included: writing an
+inspection or ETL script against a file path that does not exist (wasted
+work, confusing errors), silently committing a multi-megabyte sensor data
+file or a generated database file to git (against explicit project rules,
+and a real risk to repository size and possibly to data sensitivity), or
+discovering only much later that a required package was missing or
+mismatched, after already writing code that depends on it.
+
+=========================================================
+WHAT WE ACCOMPLISHED
+=========================================================
+
+The work in this stage was a short, focused checklist, run once, with no
+files created. Six things were checked, in this order:
+
+1. Confirmed the source file exists.
+   What was done: ran `ls -la data/input/` and confirmed
+   `data/input/sanitized.mcap` is present, 5,751,237 bytes in size.
+   Why: every later stage depends on this file existing at this exact path.
+   What was learned: the file is present and is a substantial size (about
+   5.5 MB), consistent with it containing real recorded sensor data rather
+   than being an empty placeholder.
+
+2. Confirmed the source file is excluded from git.
+   What was done: read .gitignore, and separately ran
+   `git check-ignore -v data/input/sanitized.mcap` to have git itself
+   confirm the file is ignored, rather than just trusting the text of the
+   ignore file.
+   Why: CLAUDE.md rule #2 explicitly forbids committing the source MCAP
+   file or the generated SQLite database. Checking this early prevents an
+   accidental commit later.
+   What was learned: the file is matched and ignored by the rule
+   `data/input/*` on line 2 of .gitignore. git's own `check-ignore` command
+   confirmed this (exit code 0, meaning "yes, this file is ignored").
+
+3. Confirmed Python and a project-specific virtual environment are
+   available.
+   What was done: checked the system Python version, then listed the
+   contents of the project's `.venv/` directory (a self-contained Python
+   environment created specifically for this project).
+   Why: relying on a shared, system-wide Python installation risks pulling
+   in the wrong package versions, or breaking other projects on the same
+   machine. A dedicated virtual environment keeps this project isolated.
+   What was learned: the system has Python 3.12.6 installed, and a working
+   virtual environment already existed at `.venv/` with its own `python3`,
+   `pip`, and `pytest` executables.
+
+4. Confirmed the required third-party packages are installed and
+   importable.
+   What was done: read `requirements.txt` (the list of package names and
+   exact versions this project depends on), then actually imported each
+   required package inside the virtual environment's Python interpreter,
+   rather than just trusting that "installed" means "importable."
+   Why: a package can appear in requirements.txt without actually being
+   installed correctly (for example, if the install step failed partway
+   through). Importing it is a much stronger check.
+   What was learned: `mcap` (version 1.4.0), `mcap_protobuf` (the package
+   that understands protobuf-encoded messages inside MCAP files),
+   `protobuf` (version 7.35.1, Google's data-serialization library --
+   explained further below), and `pytest` (version 9.1.1, the testing
+   framework used throughout this project) all imported successfully.
+
+5. Confirmed Python's built-in `sqlite3` module actually works.
+   What was done: opened an in-memory (temporary, not saved to disk)
+   SQLite database, turned on foreign-key enforcement with the command
+   `PRAGMA foreign_keys = ON` (a setting CLAUDE.md rule #8 explicitly
+   requires later), and ran a trivial `SELECT 1` query to confirm the
+   database engine responds correctly.
+   Why: the entire point of this project is eventually to load data into a
+   SQLite database. If the sqlite3 module were missing, misconfigured, or
+   too old to support foreign-key enforcement, that would have been an
+   urgent, project-blocking discovery -- far better to find out now, before
+   any database design work happens, than after.
+   What was learned: sqlite3 works, and reports engine version 3.45.3. The
+   foreign-key PRAGMA was accepted without error, and the test query
+   returned the expected result.
+
+6. Confirmed the source file can be opened in a safe, read-only way.
+   What was done: opened the file using Python's `open(path, 'rb')` mode
+   (`'rb'` means "read binary," which guarantees the file cannot be
+   accidentally written to through this file handle), and read only the
+   first 8 bytes -- not the whole file -- to check for the MCAP format's
+   "magic number" (a fixed sequence of bytes every valid MCAP file must
+   start with, used to confirm the file is really in MCAP format and not
+   something else entirely).
+   Why: this is the first real, physical contact with the source file. It
+   needed to happen in the safest possible way (read-only, tiny amount of
+   data) before any larger-scale reading or parsing was attempted.
+   What was learned: the file's first 8 bytes were `\x89MCAP0\r\n`, which
+   is the correct, expected magic number for an MCAP file. This confirms
+   the file is genuinely a valid MCAP file, not a renamed file of some
+   other type or a corrupted download.
+   As an extra safety measure beyond what was strictly asked, an MD5
+   checksum (a short fingerprint calculated from a file's exact contents --
+   if even one byte changes, the fingerprint changes completely) of the
+   whole file was also recorded: e32b641c93b84861d855b01a79ea09d0. This
+   checksum was re-verified after Stage 2 and Stage 3 both finished, and
+   matched exactly both times, which is concrete proof (not just an
+   assumption) that the source file was never modified by any later work.
+
+=========================================================
+WHAT WE DISCOVERED
+=========================================================
+
+- The source file is real, present, and correctly formatted.
+  Why it matters later: every later stage's output is only trustworthy if
+  the input was genuine. This was the first evidence that it is.
+
+- The file is already correctly excluded from version control by an
+  existing .gitignore rule.
+  Why it matters later: no extra .gitignore work was needed before writing
+  code; the safety net was already in place.
+
+- The project's virtual environment and required packages were already set
+  up correctly (this was not something this stage had to fix -- only
+  confirm).
+  Why it matters later: Stage 2 and Stage 3 could both start writing code
+  immediately, without losing time to environment setup or dependency
+  troubleshooting.
+
+- SQLite (via Python's sqlite3 module) supports the foreign-key enforcement
+  feature that CLAUDE.md rule #8 will require in a later stage.
+  Why it matters later: this removes a risk that the eventual database
+  design stage could discover, too late, that a required safety feature
+  was unavailable on this machine's SQLite build.
+
+- No data content was inspected in this stage. Only the file's format
+  header (8 bytes) was read. What topics, message types, or fields the
+  file actually contains was deliberately left to Stage 2, in keeping with
+  CLAUDE.md rule #4 ("Inspect the actual MCAP schemas and decoded messages
+  before designing tables") -- Stage 1's job was to confirm the file could
+  be safely approached, not to analyze what is inside it.
+
+=========================================================
+ENGINEERING DECISIONS
+=========================================================
+
+Decision: Verify everything read-only, before writing any inspection or
+pipeline code.
+Reason: The source file is irreplaceable within this project (rule #1), and
+several early assumptions (file exists, packages installed, sqlite3 works)
+could each independently block or corrupt later work if wrong.
+Alternative considered: Skip straight to writing the MCAP inspection script
+and let it fail naturally if something was missing.
+Why the chosen approach is better: A failure inside a larger script is
+harder to diagnose (was it the file? the package? the database engine?).
+A dedicated verification stage isolates each check, so any failure has an
+obvious, specific cause. It also means no time is wasted writing inspection
+logic against a file or environment that was not actually ready.
+Future impact: Every later stage can simply assume the environment works,
+instead of re-checking it, which keeps later scripts focused on their own
+job (inspecting data, analyzing keys) instead of repeating setup checks.
+
+Decision: Confirm the .gitignore exclusion using git's own
+`git check-ignore` command, not just by reading the text of .gitignore.
+Reason: A .gitignore rule can look correct on paper but not actually match
+the intended file (for example, due to a typo in the path, or a rule that
+only matches in certain directories). Asking git directly is the only way
+to be certain.
+Alternative considered: Trust the .gitignore file's text alone.
+Why the chosen approach is better: it tests the real behavior of the tool
+that matters (git), not just the configuration intended to produce that
+behavior.
+Future impact: gives real confidence, backed by tool output, that the
+source file and (later) the generated database will not be accidentally
+committed.
+
+Decision: Record an MD5 checksum of the source file as an extra,
+unrequested safety measure.
+Reason: The six checks explicitly asked for did not include a way to prove,
+after the fact, that the file was never modified. A checksum makes that
+provable rather than assumed.
+Alternative considered: Rely on "we only opened it in read-only mode" as
+sufficient proof.
+Why the chosen approach is better: read-only mode prevents accidental
+writes through that particular file handle, but a checksum is independent,
+external proof that covers the whole file and can be re-checked at any
+later point, by anyone, regardless of what code path touched the file.
+Future impact: this checksum was in fact re-verified after Stage 2 and
+Stage 3, giving concrete evidence (not just a promise) that the source file
+has remained untouched throughout the project so far.
+
+=========================================================
+FOLLOW-UP PROMPTS AND COURSE CORRECTIONS
+=========================================================
+
+This stage was a single, self-contained request with a fixed checklist of
+six items. Based on the terminal history still available, no follow-up
+prompts, clarifications, or corrections occurred within this stage -- the
+checks were run once, in one pass, and all six passed on the first attempt.
+
+=========================================================
+FILES CREATED
+=========================================================
+
+None. This stage was purely diagnostic: it ran commands and read existing
+files, but did not create, modify, or delete any file in the repository.
+This is intentional and appropriate for a verification stage -- its job was
+to confirm readiness, not to produce project artifacts.
+
+=========================================================
+VALIDATION
+=========================================================
+
+- Package import checks: each required package (mcap, mcap_protobuf,
+  protobuf, pytest) was actually imported in Python, not just checked for
+  presence in requirements.txt. This matters because a broken or partial
+  install can still show up as "listed" without being usable.
+
+- sqlite3 functional check: an in-memory database was created, a
+  foreign-key-related PRAGMA was executed, and a query was run and its
+  result checked. This matters because it tests actual behavior (does the
+  database engine respond correctly?) rather than just checking that the
+  sqlite3 module can be imported.
+
+- Read-only open + magic-number check: the file was opened in binary
+  read-only mode and its first 8 bytes were confirmed to match the known
+  MCAP file signature. This matters because it is direct evidence the file
+  is genuinely in the expected format, not just a file with the right name
+  and extension.
+
+- MD5 checksum verification: the file's checksum was computed once at the
+  start of this stage as a baseline, then independently reproduced after
+  Stage 2 and again after Stage 3, and matched exactly both times. This
+  matters because it is the strongest available evidence that rule #1
+  ("never modify the source file") was actually followed in practice, not
+  just intended.
+
+- git check-ignore verification: git itself was asked whether the source
+  file is ignored, and answered yes. This matters because it confirms rule
+  #2 protection is real and active, not just described in a text file that
+  might not be applied correctly.
+
+=========================================================
+WHAT WE INTENTIONALLY DID NOT DO
+=========================================================
+
+- Did not read or decode any message content from the MCAP file. Only an
+  8-byte format header was read. Understanding what topics, schemas, and
+  fields the file actually contains was deliberately left for Stage 2, per
+  CLAUDE.md rule #4, which requires inspecting the actual data before any
+  table design happens.
+
+- Did not design any database tables, write any SQL, or create
+  data/output/sentry.db. CLAUDE.md rule #17 explicitly says dashboard and
+  Docker work must wait until the SQLite pipeline works, and more broadly
+  the whole project's instructions require inspection (Stage 2) and key
+  analysis (Stage 3) to happen before schema design.
+
+- Did not write any Python source files or tests. There was nothing yet to
+  test -- this stage only verified pre-existing environment state.
+
+These were postponed because verifying the environment is a prerequisite
+for all of them; attempting any of them first would have risked building on
+an unconfirmed foundation.
+
+=========================================================
+RISKS OR OPEN QUESTIONS
+=========================================================
+
+- This stage confirmed the environment works on this one machine, at this
+  one point in time. It does not guarantee the same environment will exist
+  on a different machine (for example, in a CI/continuous-integration
+  system, or a teammate's laptop) unless the same setup steps are repeated
+  there.
+
+- The package versions confirmed (for example, protobuf 7.35.1) are simply
+  whatever was installed at the time of checking. Whether these are the
+  exact versions intended by the project's requirements.txt pinning, or
+  whether requirements.txt has since been updated, was not specifically
+  cross-checked line-by-line against the live environment in this stage.
+
+- This stage did not check disk space, memory, or performance
+  characteristics of the machine -- only correctness of installed tools.
+  Given the source file is a modest 5.5 MB, this was reasonably assumed to
+  be a non-issue, but it was not explicitly verified.
+
+=========================================================
+WHAT HAPPENS NEXT
+=========================================================
+
+Stage 2 builds a read-only MCAP inspection utility. We are ready for it
+because Stage 1 confirmed: the file exists and is genuine, the required
+packages for reading MCAP/protobuf data are installed and working, and the
+file can be safely opened. Stage 2 expects, as input, the same source file
+confirmed in Stage 1
+(data/input/sanitized.mcap) and produces, as output, a structural report of
+what the file actually contains (topics, schemas, fields, sample values),
+without yet designing any database. The main risk heading into Stage 2 was
+that the file's actual internal structure (its protobuf schemas) was still
+completely unknown at the end of Stage 1 -- Stage 1 confirmed the file's
+outer format (MCAP) but deliberately did not look inside it.
+
+=========================================================
+INTERVIEW EXPLANATION
+=========================================================
+
+"Before I wrote a single line of code that touched the actual sensor data,
+I spent a short, separate step just proving the ground I was standing on
+was solid. The project rules were explicit that this raw data file could
+never be modified and could never be committed to source control, so I
+didn't want my first real interaction with it to also be my first test of
+whether my environment was even set up correctly. I checked that the file
+existed and was genuinely in the format it claimed to be, that it was
+already protected from being accidentally committed, that the Python
+packages I'd need were actually importable -- not just listed in a
+requirements file -- and that the database engine I'd eventually be writing
+to actually supported the safety feature, foreign-key enforcement, that the
+project required. I also took a checksum of the file as a fingerprint, so
+that later on I could prove, not just claim, that I never touched it. That
+step ended up paying off -- I re-checked that same checksum after two more
+stages of work and it hadn't changed at all. It's a small stage, but it's
+the kind of discipline that prevents a much more expensive mistake later,
+like discovering halfway through a database rebuild that a dependency was
+missing, or finding out too late that a sensitive raw data file had been
+committed to git."
+
+=========================================================
+BEGINNER TAKEAWAYS
+=========================================================
+
+- A "virtual environment" (seen as the `.venv/` folder) is a private,
+  isolated copy of Python and its installed packages, kept separate from
+  whatever Python is installed on the rest of the computer. This means the
+  specific package versions this project needs cannot be accidentally
+  broken by, or conflict with, some other unrelated project on the same
+  machine.
+
+- "protobuf" (short for Protocol Buffers) is a format created by Google for
+  packing structured data (numbers, text, nested groups of fields) into a
+  small, efficient binary format, along with a schema (a definition of what
+  fields exist and what type each one is) that describes how to unpack it
+  again. The sensor data in this project's source file is stored using
+  protobuf.
+
+- "MCAP" is a file format (pronounced like "em-cap") designed for
+  recording streams of timestamped messages from robots, sensors, and
+  similar systems -- think of it like a black-box flight recorder file
+  format. It can store many different kinds of messages (in this project,
+  four different kinds, one per "topic") in a single file, each message
+  timestamped and tagged with which topic it belongs to. The MCAP file
+  itself doesn't know or care that the messages inside it happen to be
+  protobuf -- that's a separate, additional detail this project also has to
+  handle.
+
+- A file's "magic number" is a short, fixed sequence of bytes that a file
+  format specification requires every valid file of that type to begin
+  with. Checking it is a fast, reliable way to confirm a file really is
+  what its name/extension claims, before trying to do anything more
+  complicated with it.
+
+- An "MD5 checksum" is a short fingerprint (a string of letters and
+  numbers) calculated from a file's exact contents. Any change to the file
+  -- even a single byte -- produces a completely different checksum. This
+  makes it a simple, reliable way to prove a file has (or has not) been
+  modified between two points in time.
+
+- SQLite is a database engine that stores an entire database as a single
+  file on disk, with no separate server process required. It is well
+  suited to a local, self-contained project like this one. "Foreign-key
+  enforcement" is a database feature (not on by default in SQLite, which is
+  why CLAUDE.md rule #8 calls it out specifically) that makes the database
+  reject data that would break a declared relationship between two tables
+  -- for example, refusing to insert a "detection" row that claims to
+  belong to a "track" that doesn't exist. This project has not designed
+  those tables yet, but confirming this feature works was a necessary early
+  step.
+
+=========================================================
+EXECUTIVE SUMMARY
+=========================================================
+
+Before writing any code that reads sensor data or builds a database, this
+stage confirmed that the project's foundation was solid: the source data
+file exists, is genuinely in the expected MCAP format, and is already
+protected from being committed to git; the Python virtual environment and
+all required packages (for reading MCAP files, decoding protobuf messages,
+and running tests) are installed and actually working, not just listed as
+dependencies; and Python's built-in SQLite database module works,
+including the foreign-key enforcement feature the project will require
+later. The file was opened only in a safe, read-only way, and its exact
+contents were fingerprinted with a checksum so that any future accidental
+modification could be detected. No project files were created in this
+stage -- it was purely diagnostic. This matters because every later stage
+depends on these assumptions being true; catching a missing dependency or a
+misconfigured database engine now, in a five-minute check, is far cheaper
+than discovering the same problem in the middle of writing a database
+pipeline. With this foundation confirmed, the project was ready to safely
+begin actually looking inside the source file, which is the job of Stage 2.
+
+=========================================================
+PROJECT STATE
+=========================================================
+
+Files created:            None
+Files modified:            None
+Commands executed:
+  - ls -la data/input/
+  - cat .gitignore
+  - git check-ignore -v data/input/sanitized.mcap
+  - which python3 / python3 --version
+  - ls -la .venv/bin/
+  - cat requirements.txt
+  - (Python) import mcap, mcap_protobuf, google.protobuf, pytest, sqlite3
+  - (Python) sqlite3.connect(':memory:'); PRAGMA foreign_keys = ON; SELECT 1
+  - (Python) open('data/input/sanitized.mcap', 'rb') and read first 8 bytes
+  - md5 data/input/sanitized.mcap
+Tests executed:             None (no code existed yet to test)
+Validation results:         All 6 checks passed on the first attempt.
+Git status at end of stage: Clean; no files were added or changed by this
+                             stage.
+Recommended git commit message: Not applicable -- no files were created or
+                             changed in this stage, so there is nothing to
+                             commit.

@@ -1,6 +1,6 @@
 # MCAP Inspection Report
 
-Generated: 2026-08-05T21:13:18.885089+00:00
+Generated: 2026-08-05T21:44:50.078372+00:00
 
 This report is produced by `scripts/inspect_mcap.py`, a read-only inspection utility. The source file `data/input/sanitized.mcap` (5,751,237 bytes) was never modified. All relationship-cardinality figures are **estimates for later validation**, not declared primary/foreign keys.
 

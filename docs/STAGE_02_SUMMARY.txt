@@ -1,0 +1,770 @@
+=========================================================
+PROJECT CHECKPOINT
+=========================================================
+
+Stage Number:   2
+Stage Name:     Read-Only MCAP Structural Inspection
+Objective:      Build a read-only tool that looks inside the source sensor
+                data file, discovers exactly what data it actually
+                contains (not what the project brief assumed it contains),
+                and writes that discovery down as two reports -- one for
+                machines, one for humans -- without designing any database
+                yet.
+Status:         Complete
+Generated:      2026-08-05
+
+This summary was generated retrospectively from verified project artifacts.
+
+SOURCES USED: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md,
+data/output/mcap_schema_report.json, the source code of
+scripts/inspect_mcap.py and src/mcap_inspection/helpers.py, the tests in
+tests/test_mcap_inspection_helpers.py and tests/conftest.py, git history
+(commit 15adf58), and terminal output still visible in the working session
+(pytest runs, script runs, md5 checks). Anything not confirmed by one of
+these was left out rather than guessed.
+
+=========================================================
+WHY THIS STAGE EXISTS
+=========================================================
+
+CLAUDE.md and AGENTS.md both describe the overall goal (build a database
+from the sensor file) and both state a firm rule, #4: "Inspect the actual
+MCAP schemas and decoded messages before designing tables." They also
+forbid inventing field names (rule #3) and require every table's "grain"
+(what one row actually represents) to be explicitly defined (rule #6).
+
+None of those rules can be honored by guessing. The project brief mentions
+four topics by name -- cv_detections, cv_tracks, radar_detections,
+track_states -- but a topic name alone says nothing about what fields exist
+inside its messages, whether those messages are simple and flat or deeply
+nested, whether a given message represents one real-world object or a whole
+batch of them, or whether fields that "should" be there (like a camera ID)
+actually exist in the real data at all. This stage exists to replace all of
+that guessing with direct observation.
+
+This could not safely be skipped because designing a database schema
+around assumed field names, when the real field names turn out to be
+different (or nested three levels deep, or simply absent), produces a
+schema that either crashes the moment real data is loaded into it, or --
+worse -- silently loads incorrectly and produces wrong answers to the
+analytical questions the project cares about (like the percentage of
+detections that become tracks). If this stage had been skipped, the risk
+was building a plausible-looking but factually wrong database design in
+the very next stage, discovering the mismatch only once real data loading
+was attempted, and having to redo the design work anyway -- at a much
+higher cost, after code depending on the wrong design already existed.
+
+=========================================================
+WHAT WE ACCOMPLISHED
+=========================================================
+
+This stage happened in three parts: an approved plan, a scope-expanding
+follow-up request (covered in its own section below), and then the actual
+implementation, testing, and execution.
+
+1. Explored the real file structure before proposing a plan.
+   What was done: rather than writing a plan from memory of the project
+   brief, the file's summary metadata was read directly (channel list,
+   schema names, per-channel message counts) before any plan was written.
+   Why: to make sure the plan that was about to be proposed was grounded in
+   what the file actually contains, not just what the brief said it should
+   contain.
+   What was learned: all four expected topics were present, but the
+   underlying protobuf schema names (for example, `CVTrackFrame` for the
+   cv_tracks topic) already hinted that messages might be "frames"
+   containing batches of objects rather than one object per message -- a
+   detail the plain topic names alone did not reveal.
+
+2. Wrote a plan, got it approved, then the user added a requirement mid-
+   planning (covered fully below), and the plan was revised before any code
+   was written.
+
+3. Designed reusable, independently testable building blocks
+   (src/mcap_inspection/helpers.py) before writing the larger orchestration
+   script.
+   What was done: rather than writing one large script, small single-
+   purpose functions were written first: one that walks a protobuf message
+   definition and lists every field (including fields nested inside other
+   fields, and fields inside repeated lists), one that classifies a single
+   field's type, one that summarizes whether a field was empty/missing/
+   filled-in across a set of observed messages, one that safely shortens a
+   value for display without ever printing a huge or sensitive blob, one
+   that guesses whether a field name looks like an identifier (such as
+   ending in "_id"), and one that extracts actual values for a given field
+   out of a real decoded message.
+   Why: CLAUDE.md rule #15 requires tests for transformations and schema
+   integrity. Small, pure functions (functions whose output depends only on
+   their input, with no hidden file-reading or side effects) are far easier
+   to test thoroughly than one large script.
+   What was learned: protobuf's own reflection tools (functions the
+   protobuf library itself provides for asking "what fields does this
+   message type have?") were sufficient to build all of this without
+   guessing at field names, satisfying rule #3.
+
+4. Because no `protoc` (the official protobuf schema compiler) was
+   available on this machine, a small fake protobuf schema was built
+   programmatically inside the test suite, rather than from a `.proto`
+   file, purely so the new helper functions could be tested against
+   realistic protobuf structures (a nested message, a repeated field, an
+   enum, a map field, an optional field, and a self-referencing type) --
+   without depending on the real, much larger sensor data schema.
+   Why: this keeps the unit tests fast and independent of the actual
+   57,266-message data file, while still exercising every kind of protobuf
+   field shape the real data was expected to contain.
+   What was learned: this approach worked and became the pattern reused
+   again in Stage 3.
+
+5. Wrote scripts/inspect_mcap.py, the orchestration script, which opens the
+   file exactly once, in read-only mode, and in a single pass:
+   - Reads the file's built-in summary (topics, schema names, per-channel
+     message counts) without decoding every message.
+   - Picks at most three sample messages per topic (first, middle, and
+     last by position) to use for structural inspection, per the
+     instruction to inspect structure without dumping large amounts of
+     data.
+   - Decodes every message in the file once (not just the three samples)
+     to compute full-dataset statistics like duplicate counts and value
+     uniqueness -- this was a scope addition covered below.
+   - Classifies each topic's messages as either "a batch containing many
+     objects" or "one object/update per message," based on the actual
+     shape of the decoded data, not an assumption.
+   - Writes two output files: a detailed machine-readable JSON report and
+     a shorter, readable Markdown report.
+   What was learned: the real message counts (35,613 cv_tracks messages,
+   11,630 track_states messages, 7,121 cv_detections messages, 2,902
+   radar_detections messages -- 57,266 total) and the real per-topic field
+   counts, once every nested field was counted recursively, were far
+   larger than the plain topic list suggested: 172 fields for cv_tracks,
+   261 for track_states, 117 for cv_detections, and 223 for
+   radar_detections.
+
+6. Ran the test suite and the script itself, then used the real output to
+   find and fix real bugs (see the follow-up section), before considering
+   the stage complete.
+
+=========================================================
+WHAT WE DISCOVERED
+=========================================================
+
+- All four expected topics exist, with no extra, unexpected topics.
+  Why it matters: this directly confirms one basic assumption in the
+  project brief and CLAUDE.md's "expected analytical checks" section --
+  the four topics named there really do exist, under those exact names.
+
+- cv_tracks, cv_detections, and radar_detections are each "batch" messages:
+  one single MCAP message contains a whole list of tracks, or a whole list
+  of detections, not just one. track_states, by contrast, is one message
+  per single state update -- there is no batching.
+  Why it matters: this single fact changes what "one row" should mean for
+  a future database table. A table built assuming "one message equals one
+  row" would be silently wrong for three of the four topics.
+
+- radar_detections has no separate "radar track" structure at all. Instead,
+  each individual radar detection carries its own inline `track_id` field
+  directly on the detection.
+  Why it matters: a schema design that assumed a separate radar_tracks
+  table (mirroring cv_tracks) would be inventing a structure the real data
+  does not have -- exactly what CLAUDE.md rule #3 forbids.
+
+- A recurring pattern was found across many fields: a "legacy" numeric ID
+  field (for example, `track_id`, a large integer) paired with a newer
+  string-based field with the same name plus a "2" (for example,
+  `track_id2`), or a "_uid" suffix. In this file, the legacy numeric field
+  is very often always empty, while the "2"/"uid" string version is the one
+  actually populated.
+  Why it matters: a schema design that picked the numeric field as a
+  primary key, just because it looks like the "main" ID, would pick a
+  column that is empty for most or all of the affected topics.
+
+- Several fields were found to be completely empty in every single message
+  in the entire file: for example, `sensor_id`, `target_uid`, `tower_id`,
+  and `parent_track_id`. This pattern -- specific, individually-named
+  fields being consistently blank across tens of thousands of messages --
+  is most consistent with deliberate data sanitization (removing
+  potentially sensitive fields before sharing the file), which also lines
+  up with the file's own name, "sanitized.mcap."
+  Why it matters: any future schema or analytical query that assumes these
+  fields carry real data will silently get no useful information from
+  them. This needs to be documented as a known limitation, not discovered
+  by surprise later.
+
+- The MCAP file's own built-in "sequence" number (a counter every message
+  format carries) was found to always be 0 (or otherwise degenerate) in
+  this file.
+  Why it matters: this rules out "sequence number" as a way to uniquely
+  identify or order individual messages later -- a fact directly reused in
+  Stage 3's message-identity analysis.
+
+- `cv_tracks.tracks.detection_id`-like fields (specifically
+  `last_associated_detection_id`) showed a strong overlap with
+  `cv_detections.detections.detection_id`, hinting at a real relationship
+  between detections and the tracks that incorporate them -- directly
+  relevant to CLAUDE.md's first "expected analytical check" (what
+  percentage of detections became tracks).
+  Why it matters: this is early, promising evidence that the analytical
+  question CLAUDE.md cares about is actually answerable from the data as
+  structured -- but it was explicitly logged as an estimate needing
+  further validation, which Stage 3 later did in depth.
+
+- 39 individual "risk flags" were automatically generated, describing
+  specific fields that were either always empty, never observed at all, or
+  showed value duplication inside a single message (a stronger signal than
+  duplication across different messages, which can be expected).
+  Why it matters: this turns "the data might have quality problems" from a
+  vague worry into a specific, itemized list that a future schema design
+  can address one item at a time.
+
+=========================================================
+ENGINEERING DECISIONS
+=========================================================
+
+Decision: Build small, pure helper functions first, then a single
+orchestration script on top of them, instead of one large script.
+Reason: CLAUDE.md rule #15 requires tests for transformations. Pure
+functions (walk a schema, classify a field, summarize presence, truncate a
+value, detect an identifier-like name) are naturally easy to unit test in
+isolation.
+Alternative considered: Write the inspection logic directly inside the
+script that reads the file, testing it only by running the whole script
+against the real file.
+Why the chosen approach is better: testing against the real 57,266-message
+file for every small logic change would be slow and would not exercise
+edge cases (like a self-referencing schema, or a map field) that may not
+even occur in the real data but could occur in future data. A dedicated
+small synthetic schema, used only in tests, covers those edge cases
+directly and runs in a fraction of a second.
+Future impact: Stage 3 reused this exact helpers module and this exact
+testing pattern, which would not have been possible if the logic had been
+tangled up inside one large script.
+
+Decision: Decode every message in the file once, in a single pass, rather
+than opening and reading the file multiple times.
+Reason: the file only needed to be read once to gather both the
+"structural" information (three sample messages per topic) and the
+"statistical" information (duplicate counts, uniqueness, across all
+messages) that the scope-expansion request below asked for.
+Alternative considered: read the file once for structure (three samples)
+and a second time for full statistics.
+Why the chosen approach is better: one pass is simpler, faster, and keeps
+the read-only promise to the source file as minimal and simple as possible
+-- one open, one read-through, one close.
+Future impact: this single-pass pattern was reused again in Stage 3's own
+full read-through of the file.
+
+Decision: Classify each topic's messages as "batch" or "single record" by
+directly examining the decoded data's shape (does a top-level field match
+the topic's own name and is it a repeated list?), instead of assuming
+based on the topic name.
+Reason: the plain topic name "radar_detections" does not, by itself, tell
+you whether a message contains one detection or many. Only looking at the
+actual decoded structure can answer that reliably.
+Alternative considered: assume message-per-topic conventions from the
+project brief's plain-English description.
+Why the chosen approach is better: the real answer (three of four topics
+are batches; one is not) directly contradicts a naive "one message equals
+one row" assumption, and would have produced a wrong schema if guessed
+instead of checked.
+Future impact: this classification became a direct input into Stage 3's
+"grain" analysis for each field, and will directly shape the primary-key
+and table-grain decisions in the eventual database design stage.
+
+Decision: Track duplicate identifier values separately depending on
+whether the duplicate happens inside one single MCAP message versus across
+different messages.
+Reason: this was the specific scope-expansion request the user made mid-
+plan (see below) -- a duplicate value appearing across many different
+messages over time (like the same track ID being restated in every update)
+is expected and normal, while the same value appearing twice inside one
+single message is a much stronger signal of an actual data problem.
+Alternative considered: report a single combined "duplicate count" per
+field without this distinction.
+Why the chosen approach is better: a single combined count would have
+mixed a completely normal pattern (persistent entities being restated over
+time) together with a genuinely suspicious pattern (the same identifier
+appearing twice in one snapshot), making the report far less useful for
+deciding what needs further validation.
+Future impact: this distinction became the foundation Stage 3 built its
+much deeper "repetition expectation" analysis on top of.
+
+=========================================================
+FOLLOW-UP PROMPTS AND COURSE CORRECTIONS
+=========================================================
+
+1. Scope-expansion request, made after the initial plan was proposed but
+   before any code was written: "Also compute uniqueness, duplicate
+   counts, null frequency, and estimated relationship cardinality for
+   every likely identifier field so these statistics can later justify
+   primary-key and foreign-key design."
+   What prompted it: the initially-proposed plan only covered structural
+   inspection (field names, types, up to three sample values) -- it did
+   not yet include the full-dataset statistics needed to actually judge
+   whether a field was unique enough to be a primary key.
+   What problem it fixed: without this, the report would have described
+   what fields exist, but not whether any of them were trustworthy
+   candidates for keys -- a critical gap given CLAUDE.md rule #7 ("use
+   primary and foreign keys only when justified by the source data").
+   How it improved the project: the plan was revised, before coding began,
+   to add a second, full-dataset decode pass (later merged into the same
+   single pass as an efficiency improvement) that computes, per
+   identifier-shaped field: how many times it appears, how many are
+   null/empty, how many distinct values exist, and how many values repeat.
+   What changed: this became part of the very first version of
+   scripts/inspect_mcap.py and src/mcap_inspection/helpers.py -- no
+   separate commit exists for "before" this change, because it was folded
+   into the plan before implementation started.
+
+2. Clarification, made in the same follow-up message: "distinguish between
+   unexpected duplicates and expected repetition caused by repeated
+   states/updates for the same persistent entity" and "keep all cross-topic
+   cardinality and relationship results labeled as estimates only. Do not
+   declare primary keys or foreign keys yet."
+   What prompted it: simply counting "how many values repeat" is not
+   enough -- a track's ID repeating across a hundred update messages is
+   completely normal, while the same ID appearing twice within one single
+   message is not. Without this distinction, the report would have
+   over-flagged normal, expected data patterns as problems.
+   What problem it fixed: this is exactly the within-message versus
+   across-message split described in the Engineering Decisions section
+   above, plus an explicit rule that no relationship should ever be
+   reported as a settled fact -- only as an estimate needing later human
+   validation.
+   How it improved the project: the resulting report clearly labels every
+   cross-topic relationship guess with the word "estimate" and a
+   disclaimer, and separates "duplicate within one message" from
+   "duplicate across different messages" everywhere duplicates are
+   reported.
+   What changed: this shaped the design of the `identifier_statistics` and
+   `relationship_cardinality_estimates` sections of
+   scripts/inspect_mcap.py from the very start.
+
+3. Bug found and fixed during implementation, before the script's first
+   successful run: a field named something like `capture_time`, which is
+   not a simple value but a nested message (specifically Google's standard
+   `Timestamp` message type), was being treated as if it were a hashable,
+   comparable identifier value, because its name happened to match the
+   "looks like a timestamp" naming pattern used to detect identifier-like
+   fields. This crashed with an "unhashable type" error the first time the
+   script was run against the real file.
+   What prompted it: running the script for the first time against the
+   real 57,266-message file, rather than only against the small test
+   schema, which did not happen to include this exact situation.
+   What problem it fixed: without this fix, the script could not run to
+   completion at all.
+   How it improved the project: the fix restricts full-dataset identifier
+   statistics to simple scalar or enum-type fields only -- structured,
+   nested message-type fields are still shown in the structural field
+   catalog, just excluded from the value-uniqueness statistics, since they
+   cannot meaningfully be compared as single values.
+   What changed: scripts/inspect_mcap.py (the field-selection logic that
+   decides which fields get full-dataset statistics).
+
+4. Gap found and fixed after the first successful run, by manually
+   reviewing the real output: fields that are always present but always
+   hold an empty/default value (like an empty string) were not being
+   flagged as a risk at all, because the original risk-flagging logic only
+   checked for fields that were "null or unset" -- it did not separately
+   check for fields that are technically present but never meaningfully
+   filled in.
+   What prompted it: manually inspecting the generated report and noticing
+   that `metadata.sensor_id`, a field later confirmed to be always blank
+   across the whole file, was not appearing in the risk-flag list at all,
+   even though it clearly should have been.
+   What problem it fixed: without this fix, some of the most important
+   findings in the whole report (the sanitization pattern described in the
+   "What We Discovered" section) would have gone completely unflagged.
+   How it improved the project: two new risk categories were added --
+   "always empty field" (present but never meaningfully filled in) and
+   "identifier never observed" (a field whose containing repeated group
+   was empty in every single message) -- expanding the total risk-flag
+   count from 7 to 39 findings.
+   What changed: scripts/inspect_mcap.py (the risk-flag generation logic).
+
+=========================================================
+FILES CREATED
+=========================================================
+
+src/mcap_inspection/__init__.py
+  Purpose: marks the src/mcap_inspection directory as a proper, importable
+  Python package.
+  Inputs/Outputs: none (empty file).
+  Generated or handwritten: handwritten (created empty, on purpose).
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58.
+  Will it be reused later: yes -- every later script imports from this
+  package.
+
+src/mcap_inspection/helpers.py (411 lines)
+  Purpose: reusable, independently-testable functions for walking a
+  protobuf schema, classifying fields, summarizing presence/emptiness,
+  safely truncating sample values, and detecting identifier-shaped field
+  names.
+  Inputs: protobuf schema/field objects and already-decoded protobuf
+  message objects (no file access of its own).
+  Outputs: structured Python data (field descriptions, presence summaries,
+  short display strings).
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58.
+  Will it be reused later: yes -- reused directly by Stage 3's
+  scripts/analyze_keys.py, and will very likely be reused again by the
+  future ETL/loading stage, since the same schema-walking logic will be
+  needed to write data into the database.
+
+scripts/inspect_mcap.py (880 lines)
+  Purpose: the orchestration script -- opens the source file exactly once,
+  read-only, decodes every message, produces the structural and
+  statistical findings, and writes the two report files.
+  Inputs: data/input/sanitized.mcap (read-only).
+  Outputs: data/output/mcap_schema_report.json and
+  docs/MCAP_INSPECTION.md.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58.
+  Will it be reused later: yes, in the sense that it can be re-run any
+  time the source file changes or the analysis needs refreshing; it is
+  also a design reference for the later ETL stage, which will need very
+  similar schema-walking and message-decoding logic (though used to load
+  data rather than just describe it).
+
+tests/conftest.py (163 lines)
+  Purpose: builds a small, self-contained fake protobuf schema at test
+  time (since no protoc compiler was available on this machine), covering
+  every kind of field shape (nested message, repeated field, enum, map,
+  optional/presence-tracked field, self-referencing type) needed to
+  thoroughly test the helper functions.
+  Inputs: none (pure Python construction).
+  Outputs: reusable pytest fixtures shared by the test files.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58.
+  Will it be reused later: yes -- Stage 3's tests reuse the same pytest
+  configuration, and any future stage adding more helper-function tests
+  would likely extend this same fixture file.
+
+tests/test_mcap_inspection_helpers.py (311 lines, 33 tests)
+  Purpose: unit tests for every function in helpers.py.
+  Inputs: the synthetic schema from conftest.py.
+  Outputs: pass/fail test results (no project data files).
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58.
+  Will it be reused later: yes -- re-run automatically any time the
+  helpers module changes, including in later stages that import it.
+
+pyproject.toml (3 lines)
+  Purpose: minimal project configuration so pytest can find and import
+  code under src/ without a separate installation step (sets
+  `pythonpath = ["src"]` and `testpaths = ["tests"]`).
+  Inputs/Outputs: none (a configuration file, not a program).
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58.
+  Will it be reused later: yes -- every later test run in this project
+  depends on this configuration.
+
+docs/MCAP_INSPECTION.md (1,127 lines)
+  Purpose: the human-readable structural inspection report -- topics
+  found, per-topic field catalogs, sample values, identifier statistics,
+  relationship estimates, and risk flags.
+  Inputs: generated automatically by scripts/inspect_mcap.py from the real
+  source file.
+  Outputs: none (this is itself the output).
+  Generated or handwritten: fully generated by code; not hand-edited.
+  Should it be committed to git: yes -- already committed, in commit
+  15adf58 (this is a project artifact/report, not raw source data or a
+  generated database, so CLAUDE.md rule #2 does not exclude it).
+  Will it be reused later: yes -- this document is a primary input to
+  Stage 3's analysis, and to this documentation stage itself.
+
+data/output/mcap_schema_report.json (generated, machine-readable)
+  Purpose: the same findings as MCAP_INSPECTION.md, in a structured format
+  a program can read back in.
+  Inputs: generated automatically by scripts/inspect_mcap.py.
+  Outputs: none (this is itself the output).
+  Generated or handwritten: fully generated.
+  Should it be committed to git: no -- this file lives under
+  data/output/, which .gitignore deliberately excludes (rule: keep
+  generated data files, including this report, out of git; only the
+  data/output/.gitkeep placeholder is kept, so the empty folder itself
+  still exists in a fresh checkout).
+  Will it be reused later: yes -- this exact file was read directly, as a
+  starting point, by Stage 3's scripts/analyze_keys.py, and will likely be
+  read again by the future ETL stage.
+
+=========================================================
+VALIDATION
+=========================================================
+
+- Unit tests (33 tests in tests/test_mcap_inspection_helpers.py, all
+  passing): each helper function was tested against a small, controlled
+  fake schema, including edge cases (a field that never appears, an empty
+  repeated list, a self-referencing type). This matters because it proves
+  the underlying logic is correct on cases that are easy to construct
+  deliberately, even if the real data does not happen to exercise every
+  edge case itself.
+
+- Python compilation check (`python -m py_compile` on every new file):
+  confirms every file is syntactically valid Python with no typos or
+  structural errors, independent of whether its logic is correct. This is
+  a cheap, fast first check before running anything for real.
+
+- Running the actual script against the real 57,266-message file, twice
+  (once to catch the Timestamp-crash bug, once after fixing it, and again
+  after the risk-flag fix): this is the strongest form of validation for
+  this stage, because it proves the logic behaves correctly not just on a
+  small synthetic test schema, but on the full scale and real messiness of
+  the actual project data.
+
+- MD5 checksum re-verification: the source file's checksum, first recorded
+  in Stage 1, was recomputed and found unchanged after this stage's script
+  ran. This is direct proof that even though the script reads the file
+  extensively (every single message, in a full decode pass), it never
+  wrote to it -- rule #1 was actually honored in practice, not just
+  intended.
+
+- Manual review of the generated report's content (not just "did the
+  script run without crashing," but "are the numbers in the report
+  actually sensible"): this is what caught the risk-flag gap described in
+  the follow-up section -- a bug that produced a report with no crash and
+  no test failure, but that was still substantively incomplete. This
+  matters because automated tests alone cannot catch every kind of
+  "technically works, but the output is misleading" problem; a human
+  sanity-check of real output is a distinct and necessary kind of
+  validation.
+
+=========================================================
+WHAT WE INTENTIONALLY DID NOT DO
+=========================================================
+
+- Did not design any database table, write any schema.sql, or create
+  data/output/sentry.db. CLAUDE.md rule #17 requires the SQLite pipeline
+  to work before anything else (dashboard, Docker) is attempted, and more
+  fundamentally, rule #4 requires this inspection stage to happen first --
+  designing tables before this stage finished would have meant designing
+  them from guesses.
+
+- Did not write any ETL (extract-transform-load) code -- nothing in this
+  stage inserts data into any database.
+
+- Did not attempt to answer CLAUDE.md's two "expected analytical checks"
+  (the detection-to-track percentage, or the drone-vs-airplane average
+  track duration). Early, promising signals relevant to the first question
+  were noted, but explicitly logged as an estimate needing further
+  validation, not a final answer.
+
+- Did not declare any field a primary key or foreign key. Every
+  relationship-like finding in this stage's report is explicitly labeled
+  an estimate.
+
+These were postponed because CLAUDE.md rule #4 requires this exact
+ordering -- inspect first, design tables later -- and because attempting
+any of them before this stage's findings were solid would have risked
+building real, harder-to-undo work (a schema, loading code) on top of
+possibly-wrong assumptions about the data's structure.
+
+=========================================================
+RISKS OR OPEN QUESTIONS
+=========================================================
+
+- The report's cross-topic relationship guesses (for example, that
+  cv_tracks references cv_detections through a shared ID) are explicitly
+  only estimates, based on matching field names and checking whether their
+  values overlap -- not a guarantee. Some of these were later confirmed,
+  and some were later rejected, once Stage 3 investigated them properly
+  (see docs/STAGE_03_SUMMARY.txt).
+
+- The apparent sanitization pattern (many fields always empty) is an
+  observation, not a confirmed fact about why those fields are empty. It
+  could be deliberate sanitization, or it could simply be that this
+  particular recording session never happened to populate those fields.
+  This distinction matters for a future schema design decision (should
+  these columns be included at all?) but was not something this stage
+  could resolve on its own.
+
+- The three "sample messages per topic" used for structural/example
+  purposes were chosen by position (first, middle, last) rather than by
+  any more sophisticated sampling method. This was a deliberate,
+  reasonable choice to stay within the "no more than 3 representative
+  messages" instruction, but means the samples are not guaranteed to
+  showcase every unusual value pattern that might exist elsewhere in the
+  file.
+
+=========================================================
+WHAT HAPPENS NEXT
+=========================================================
+
+Stage 3 takes this stage's structural report as a direct input and asks a
+much narrower, deeper question about a curated set of identifier fields:
+not just "does this field look unique," but "how does it behave --
+uniquely, or as an expected repeating pattern -- and can two fields from
+different topics actually be joined together, or do they just happen to
+share a name?" We are ready for Stage 3 because this stage already
+produced the field catalog, the batch-vs-single-record classification per
+topic, and the first-pass duplicate/uniqueness numbers that Stage 3 builds
+directly on top of. Expected input: data/output/mcap_schema_report.json
+(this stage's output) plus a fresh, deeper read of the source file itself.
+Expected output: docs/KEY_ANALYSIS.md and data/output/key_analysis.json.
+The main risk heading into Stage 3 was that several of this stage's
+relationship estimates were still unverified guesses -- Stage 3's job was
+specifically to either confirm or reject them with real evidence.
+
+=========================================================
+INTERVIEW EXPLANATION
+=========================================================
+
+"Once I'd confirmed the environment was ready, my next move wasn't to
+start designing a database -- it was to build a tool whose entire job was
+to look inside the real data and tell me what was actually there, before I
+committed to any design decisions. The project brief named four data
+topics, but a name doesn't tell you the shape of the data behind it -- and
+in this case, three of those four topics turned out to be batches
+containing many objects per message, while the fourth was one object per
+message. If I'd designed a schema assuming 'one message equals one row'
+across the board, it would have been wrong for most of the data. I also
+built the inspection tool to compute real statistics -- how often does
+each identifier repeat, and does it repeat inside a single snapshot
+message, which is suspicious, or across many messages over time, which is
+completely normal for something like a persistent track ID being restated
+on every update. That distinction mattered a lot, because without it, a
+report would either bury real problems in noise or flag completely normal
+behavior as an error. And when I actually ran the tool against the real
+data and read through the output by hand, rather than just trusting that
+it ran without crashing, I caught a real gap -- several important fields
+were always blank, but my first version of the risk-flagging logic wasn't
+catching that pattern at all. Fixing that surfaced what looks like
+deliberate data sanitization -- specific fields wiped clean throughout the
+whole file -- which is exactly the kind of thing you want to know about
+before you design a table around a column that will, in practice, always
+be empty."
+
+=========================================================
+BEGINNER TAKEAWAYS
+=========================================================
+
+- "Protobuf" data is defined by a schema (a description of what fields
+  exist, and what type each one is: text, number, nested group, list,
+  etc.). Protobuf's own libraries let a program ask the schema, at
+  runtime, "what fields do you have?" -- this is how this stage discovered
+  real field names and types without anyone having to type them in by
+  hand, which is exactly what avoided "inventing" field names.
+
+- A "nested" field is a field whose value is not a single simple thing
+  (like a number or a string) but is itself a whole other group of fields.
+  A "repeated" field is a field that can hold a list of many values (or
+  many nested groups) instead of just one. Real-world sensor data is often
+  both: a list of nested groups, several layers deep -- exactly what this
+  stage found in this project's data (in one case, fields nested five
+  levels deep inside other fields).
+
+- The "grain" of a table (a term used throughout CLAUDE.md) means: what
+  does one single row actually represent? One customer? One order? One
+  order item? Getting this wrong is one of the most common and most
+  expensive mistakes in database design, because every later query,
+  calculation, and constraint depends on it being right. This stage's main
+  job was figuring out the true grain of each topic's data before any
+  table existed.
+
+- Just because a field is present in every message doesn't mean it's
+  useful -- a field can be present but always hold an empty or default
+  value. Distinguishing "missing" from "present but empty" turned out to
+  matter a lot in this project's real data.
+
+- Two things having the same name (like "track_id" appearing in three
+  different topics) does not mean they mean the same thing or can be
+  safely joined together in a database. This stage found several such
+  same-named fields and explicitly labeled any guess about whether they
+  are related as an "estimate," not a fact -- a distinction Stage 3 later
+  tested directly against the real data.
+
+=========================================================
+EXECUTIVE SUMMARY
+=========================================================
+
+This stage built a read-only tool that opens the project's sensor data
+file exactly once and reports, in detail, what is actually inside it --
+before any database table was designed. It confirmed all four expected
+data topics exist, discovered that three of the four are "batch" messages
+(one MCAP message contains many objects) while the fourth is one object
+per message, and produced a full field-by-field catalog covering up to 261
+fields per topic once nested structures were counted. It also computed
+real, full-dataset statistics (how often each identifier repeats, and
+whether that repetition happens suspiciously inside one message or
+normally across many messages over time) so that future primary-key and
+foreign-key decisions can be based on evidence rather than assumption.
+Along the way, it uncovered a systemic pattern of "legacy numeric ID plus
+newer string ID" field pairs, and strong evidence that several specific
+fields (like sensor and camera identifiers) have been deliberately blanked
+out across the entire file, consistent with data sanitization. A real bug
+(a crash on a nested timestamp field) and a real gap (empty-but-present
+fields not being flagged) were both found and fixed by actually running
+the tool against the real data and reading its output carefully, not just
+by passing automated tests. This matters because every later stage --
+identifier analysis, and eventually the database schema itself -- depends
+on this stage's findings being accurate; a wrong assumption here would
+have propagated into every later decision. With this structural map of the
+real data in hand, the project was ready to move to a much deeper,
+narrower analysis of specific identifier fields and their relationships,
+which is Stage 3's job.
+
+=========================================================
+PROJECT STATE
+=========================================================
+
+Files created:
+  src/mcap_inspection/__init__.py
+  src/mcap_inspection/helpers.py
+  scripts/inspect_mcap.py
+  tests/conftest.py
+  tests/test_mcap_inspection_helpers.py
+  pyproject.toml
+  docs/MCAP_INSPECTION.md
+  data/output/mcap_schema_report.json (generated; gitignored, not
+    committed)
+
+Files modified:              None (all new files; no pre-existing project
+                              source files were changed).
+
+Commands executed (verifiable from terminal history):
+  - .venv/bin/python3 -m pytest tests/test_mcap_inspection_helpers.py -v
+  - .venv/bin/python3 -m pytest tests/test_mcap_inspection_helpers.py -q
+    (re-run after each fix)
+  - .venv/bin/python3 scripts/inspect_mcap.py (run multiple times, once per
+    bug fix)
+  - .venv/bin/python3 -m py_compile scripts/inspect_mcap.py
+    src/mcap_inspection/helpers.py src/mcap_inspection/__init__.py
+    tests/conftest.py tests/test_mcap_inspection_helpers.py
+  - md5 data/input/sanitized.mcap (re-verified unchanged)
+  - git status --short / git check-ignore (confirmed generated report
+    files are correctly gitignored)
+
+Tests executed:               33 tests in tests/test_mcap_inspection_helpers.py,
+                               all passing on the final run.
+
+Validation results:           py_compile clean; pytest 33/33 passed;
+                               script ran to completion against the real
+                               57,266-message file; MD5 checksum of the
+                               source file unchanged before and after.
+
+Git status at end of stage:   All 8 new files above were later committed in
+                               commit 15adf58, "Add read-only MCAP
+                               inspection utility" (7 tracked files, 2,895
+                               lines added; data/output/mcap_schema_report.json
+                               is not part of that commit, since it is
+                               gitignored). Note: this commit was found
+                               already present in the repository's git
+                               history; it was not executed by the
+                               assistant during this working session, and
+                               exactly when or by whom it was made cannot
+                               be independently verified from this session
+                               beyond the commit metadata itself.
+
+Recommended git commit message (for reference, describing what this
+stage's work represents -- actual commit already exists as 15adf58):
+  "Add read-only MCAP inspection utility
+
+  Adds scripts/inspect_mcap.py and src/mcap_inspection/helpers.py to
+  discover the real structure of data/input/sanitized.mcap (topics,
+  schemas, nested fields, batch-vs-single-record grain, identifier
+  uniqueness/duplication statistics) without modifying the source file or
+  designing any database schema. Includes unit tests for all reusable
+  helper functions against a synthetic protobuf schema."

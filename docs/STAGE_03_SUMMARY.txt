@@ -1,0 +1,818 @@
+=========================================================
+PROJECT CHECKPOINT
+=========================================================
+
+Stage Number:   3
+Stage Name:     Identifier, Message-Grain, and Relationship (Key) Analysis
+Objective:      Take the field-level map produced in Stage 2 and go much
+                deeper on the specific fields that could become database
+                keys -- proving, with real evidence from the full data
+                file, which ones are trustworthy, which same-named fields
+                across different topics are actually related versus just
+                coincidentally named alike, and how a single source
+                message could be uniquely identified -- all without yet
+                writing any database schema.
+Status:         Complete
+Generated:      2026-08-05
+
+This summary was generated retrospectively from verified project artifacts.
+
+SOURCES USED: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md (Stage 2's
+report, used as a direct input here), docs/KEY_ANALYSIS.md,
+data/output/key_analysis.json, data/output/mcap_schema_report.json, the
+source code of scripts/analyze_keys.py and
+src/mcap_inspection/key_analysis.py, the tests in
+tests/test_key_analysis.py, and terminal output still visible in the
+working session (pytest runs, script runs, md5 checks, git status). Where a
+detail could not be confirmed from one of these, it is stated as unknown
+rather than assumed.
+
+=========================================================
+WHY THIS STAGE EXISTS
+=========================================================
+
+Stage 2 produced a wide, structural map of the data: every field, its
+type, whether it looked like an identifier by name, and some first-pass
+statistics. But CLAUDE.md rule #7 says primary keys and foreign keys must
+only be used "when justified by the source data" -- and Stage 2's own
+findings already showed that names alone cannot be trusted for this. Stage
+2 found, for example, that several topics have a field literally called
+"track_id," but never proved whether those fields actually refer to the
+same underlying tracked object across topics, or are simply unrelated
+values that happen to share a name.
+
+This stage exists to close that gap: to take a short, carefully chosen list
+of the fields most likely to matter for database keys, and subject each
+one to a much more rigorous, full-dataset test -- not just "is this field
+usually unique," but "when it repeats, does it repeat in a pattern that
+makes sense for a persistent real-world entity being updated over time, or
+does it repeat in a way that looks like an actual data problem?" And for
+every pair of same-named fields across different topics, to actually check
+whether their real values overlap, using the exact protobuf type of each
+field (so a text-based ID is never silently compared to a number-based ID
+as if they were the same kind of thing).
+
+This could not safely be skipped because a database schema built directly
+on Stage 2's broader findings, without this deeper check, risked declaring
+a foreign-key relationship between two fields that merely share a name but
+actually live in completely different ID systems -- exactly the trap
+CLAUDE.md rule #7 is designed to prevent. If this stage had been skipped,
+the risk was a schema that looks reasonable on paper (matching field
+names, foreign keys drawn between them) but that either rejects valid data
+at load time (if foreign-key enforcement is on, per rule #8) or silently
+produces wrong join results in every future query -- a mistake that could
+easily go unnoticed until someone tried to actually answer one of
+CLAUDE.md's analytical questions and got a nonsensical number back.
+
+=========================================================
+WHAT WE ACCOMPLISHED
+=========================================================
+
+1. Selected a specific, grounded list of identifier-shaped fields to
+   investigate deeply, rather than re-analyzing every field in the file.
+   What was done: a curated list of about 32 fields across all four
+   topics was assembled, based directly on real field paths already
+   confirmed to exist in Stage 2's report (things like
+   `cv_detections.detections.detection_id`,
+   `cv_tracks.tracks.last_associated_detection_id`,
+   `track_states.track_id2`, `radar_detections.detections.track_id`), plus
+   the categories of field the user specifically asked to be checked
+   (sensor IDs, camera IDs, measurement IDs, asset IDs, parent-track IDs,
+   nested collections of detection IDs).
+   Why: analyzing all several hundred fields at this level of depth would
+   have produced an unreadable report; focusing on the fields that could
+   plausibly become keys keeps the analysis both thorough and usable.
+   What was learned: two of the categories the project brief implied
+   should exist -- a "camera_id" field and a "measurement_id" field --
+   were confirmed, by actually searching the real field catalog, not to
+   exist anywhere in the four schemas. This was reported honestly as "not
+   found," with the closest real fields named instead, rather than
+   assuming they existed somewhere.
+
+2. Built a second, deeper set of reusable, independently-testable
+   functions (src/mcap_inspection/key_analysis.py), separate from Stage
+   2's helpers.py, specifically for this stage's questions: what "kind" of
+   row does a field live on (a one-time detection event? a repeating
+   state update? a link between two other things?); full statistics for
+   one field including a genuinely new distinction -- values that repeat
+   inside one message (usually a red flag) versus across different
+   messages (often normal) versus across different timestamps versus
+   across different parent records; whether a set of candidate "unique ID"
+   fields for identifying a single source MCAP message actually has zero
+   collisions when tested against the whole file; whether two fields from
+   different topics can be safely compared at all (only if their exact
+   protobuf types match); and specific detection-to-track pairing and
+   orphan-detection logic.
+   Why: the same reasoning as Stage 2 -- CLAUDE.md rule #15 requires
+   tests, and small, pure functions with a single clear job are what makes
+   thorough testing possible.
+   What was learned: this pattern (small testable functions, then one
+   larger script) scaled well from Stage 2 and was reused again here
+   without needing to be redesigned.
+
+3. Read the source file a second time, in one more complete pass, to
+   collect the specific paired information this stage's questions needed
+   (for example: for every track in every cv_tracks message, both its own
+   track ID and the detection ID it references, together, so the two could
+   be checked as a matched pair -- not just counted separately).
+   Why: Stage 2's statistics tracked each field independently; this stage
+   specifically needed to know, for the same single track record, both its
+   own identity and what it referenced, at the same time.
+   What was learned: this required a different, more targeted kind of data
+   collection than Stage 2's, even though it re-read the same source file.
+
+4. Tested every candidate way of uniquely identifying one single source
+   MCAP message against the entire file (not a sample), because Stage 2
+   had already found that the file's own built-in "sequence" number is
+   degenerate (effectively always the same value).
+   What was done: several combinations were tried --
+   topic+sequence, channel_id+sequence, topic+log_time+sequence,
+   channel_id+log_time+sequence, channel_id+log_time alone, and a
+   generated, made-up position counter (source_message_index) -- and each
+   one's collision count (how many messages would end up sharing the same
+   "unique" key) was measured across all 57,266 messages.
+   Why: without this, any later schema design might have simply assumed
+   sequence numbers were usable for row identity, which Stage 2 had
+   already shown to be false, and would have needed to discover the
+   problem the hard way, during data loading.
+   What was learned: every combination involving sequence collapsed
+   massively (57,266 messages down to just 4 distinct key values); even
+   adding the message's timestamp only reached 52,890 distinct values out
+   of 57,266 -- still short. Only the made-up position counter was
+   perfectly collision-free.
+
+5. Ran the tests and the script, and, as in Stage 2, manually reviewed the
+   real output -- which surfaced two genuine classification bugs that were
+   found and fixed before the stage was considered complete (see the
+   follow-up section).
+
+=========================================================
+WHAT WE DISCOVERED
+=========================================================
+
+- `cv_detections.detections.detection_id` and its companion field
+  `detection_uid` are both perfectly unique across the whole file: 1,911
+  populated values, 1,911 distinct values, zero repeats of any kind.
+  Why it matters: this is the strongest possible evidence that a raw CV
+  detection event genuinely is a one-time, non-repeating thing in this
+  data -- a real, confirmed candidate for a primary key in a future
+  detections table.
+
+- `cv_tracks.tracks.track_id` (17 distinct values, restated 9,496 times
+  across many messages, zero times duplicated inside a single message) and
+  `track_states.track_id2` (103 distinct values, similar pattern) both
+  show the exact repetition pattern you would expect from a persistent
+  object being restated in an update every time a new message arrives --
+  not a data problem.
+  Why it matters: this confirms, with real numbers instead of a guess,
+  that these fields represent an entity's identity across time, not a
+  per-message row identity. A future table for "one row per track state"
+  will need a different key than the track ID alone.
+
+- Despite three different topics all containing a field literally named
+  "track_id" (or a close variant), a direct, type-aware comparison found
+  zero overlapping values between any pair of them -- even between the two
+  pairs where the field types actually matched (both text-based strings).
+  Why it matters: this proves, rather than assumes, that these are three
+  separate ID systems that happen to share a name. Joining them together
+  in a future schema, just because the names match, would silently produce
+  wrong results. This directly fulfills the project's instruction not to
+  join fields merely because they share a name.
+
+- Of the 1,911 real CV detections, 1,868 are referenced by at least one
+  track's `last_associated_detection_id` field. Of those 1,868 references,
+  4 point to a detection ID that does not actually exist anywhere in the
+  detections data (called an "orphaned reference"), and 47 real detections
+  are never referenced by any track at all. Critically, zero detections
+  were found linked to more than one different track -- every reference
+  is clean and unambiguous.
+  Why it matters: this is a concrete, evidence-based answer to part of
+  CLAUDE.md's first analytical question (what fraction of detections
+  become part of a track) and tells a future schema designer exactly how
+  to handle the leftover cases (4 broken references, 47 detections with no
+  track yet) rather than being surprised by them during data loading.
+
+- The same detection-to-track reference is legitimately restated 1,865
+  times across different track-update messages (the same pairing
+  appearing again and again as a track gets updated over time), separate
+  from the 1,868 distinct pairings themselves.
+  Why it matters: this confirms that a future bridge table linking
+  detections to tracks should be built around the distinct (detection,
+  track) pairing, not around counting every message that happens to
+  restate it.
+
+- No field tested for MCAP message uniqueness -- not the topic, not the
+  channel ID, not the sequence number, not even sequence combined with
+  timestamp -- was collision-free across the whole file. Only a made-up,
+  generated position counter was.
+  Why it matters: this is a direct, load-bearing input to a future
+  database design decision -- the eventual "source message" table will
+  need its own generated ID column, because nothing in the raw data itself
+  can serve that role reliably.
+
+- Several same-named fields across topics (for example, `sensor_id`
+  appearing in both `track_states.measurements` and `track_states.sensors`)
+  were confirmed to genuinely overlap in value, with matching types --
+  unlike the track_id case above. These were labeled "strongly supported"
+  candidates for a relationship, short of "confirmed," because although
+  the data supports it, the field names themselves don't explicitly
+  encode the relationship the way `last_associated_detection_id` does.
+  Why it matters: this shows the analysis is not simply rejecting every
+  cross-topic match -- it is distinguishing, with evidence, between
+  matches that hold up and matches that do not.
+
+=========================================================
+ENGINEERING DECISIONS
+=========================================================
+
+Decision: Never compare identifier values across two fields unless their
+exact protobuf type matches (for example, never compare a whole-number ID
+to a text-based ID, even if they might represent "the same" ID under some
+imagined conversion).
+Reason: this was an explicit instruction from the user, given specifically
+because two fields with the same name can easily have different
+underlying types across different topics (which Stage 2 had already hinted
+at).
+Alternative considered: convert values to a common representation (for
+example, turn every ID into text) before comparing, to catch
+"same-value-different-type" cases.
+Why the chosen approach is better: silently converting types before
+comparing would hide a real, important fact -- that two fields were
+defined differently in the first place -- and risks manufacturing false
+matches. Keeping the comparison strict means every reported overlap is
+real and trustworthy, at the cost of not automatically catching same-value
+matches that happen to use different types.
+Future impact: this makes every "namespace verdict" in this stage's report
+directly trustworthy for schema design, without a hidden asterisk about
+type coercion.
+
+Decision: Split "duplicate occurrences" four ways -- within the same
+message, across different messages, across different timestamps, and
+across different parent records -- instead of Stage 2's simpler two-way
+split.
+Reason: the user's guidance in this stage specifically called out that a
+persistent track ID may legitimately repeat across many update rows, and
+that a duplicate is not automatically a defect -- but also asked for a
+detailed breakdown covering timestamps and parent-scoped repetition, which
+Stage 2's simpler within/across-message split could not fully answer (for
+example, "does the same detection ID ever get claimed by two different
+tracks?" needs a parent-scoped check, not just a message-scoped one).
+Alternative considered: keep Stage 2's simpler two-way split and only add
+narrative commentary explaining exceptions by hand.
+Why the chosen approach is better: a hand-written exception list does not
+scale and is not provable; a fourth, parent-scoped repetition count
+directly and automatically answers "is this detection linked to more than
+one track" for every field checked, not just the ones a person happened to
+think to check by hand.
+Future impact: this parent-scoped check is exactly what proved, with real
+numbers, that zero CV detections are linked to more than one track --
+a specific, load-bearing fact for the future bridge-table design.
+
+Decision: Test message-identity candidates across the entire file
+(all 57,266 messages), not a sample.
+Reason: uniqueness is only meaningful if it holds everywhere; a candidate
+key that looks unique in a sample could still collide somewhere else in
+the file, and the whole point of this check was to find out for certain
+whether the file's own sequence numbers (already known from Stage 2 to be
+degenerate) could still be rescued by combining them with other fields.
+Alternative considered: check a sample of messages for speed.
+Why the chosen approach is better: the file is small enough (57,266
+messages, a few seconds of decode time) that a full check was affordable,
+and a sample-based check could have missed the exact collisions that
+matter most.
+Future impact: gives a fully confident, not just probable, recommendation
+that a generated surrogate message ID is necessary -- this can be relied
+on directly during the future ETL stage's design, without needing to
+re-verify it.
+
+Decision: Recommend a generated, made-up "surrogate" key
+(source_message_id) for identifying MCAP messages, instead of any natural
+combination of real fields.
+Reason: this was the explicit fallback the user asked to be included if no
+natural combination proved collision-free -- and the full-file test above
+proved exactly that: none of the natural combinations were collision-free.
+Alternative considered: accept the closest natural combination
+(channel_id + log_time + sequence, which reached 52,890 of 57,266 distinct
+values) as "good enough."
+Why the chosen approach is better: "good enough" is not good enough for a
+column meant to guarantee uniqueness -- 4,376 short of collision-free
+means real collisions would happen, and a database relying on that
+combination as a key would either reject valid data or silently merge
+distinct messages together.
+Future impact: the future ETL/schema stage now has a clear, tested,
+justified reason to add a generated ID column for source messages, instead
+of debating it from scratch.
+
+=========================================================
+FOLLOW-UP PROMPTS AND COURSE CORRECTIONS
+=========================================================
+
+1. Explicit requirements added to the plan before any code was written:
+   "preserve the exact protobuf field type and value representation when
+   comparing identifier namespaces, especially string versus integer IDs"
+   and "include a deterministic source_message_index as the fallback
+   recommendation if no natural composite key is collision-free."
+   What prompted it: these were specific refinements the user added on
+   top of the initially-proposed plan, before approving it.
+   What problem it fixed: without the first instruction, there was a risk
+   of quietly treating a text-based ID and a number-based ID as
+   comparable, which could manufacture false relationship matches. Without
+   the second, the plan might have ended with an unsatisfying "no good key
+   exists" conclusion instead of a concrete, usable recommendation.
+   How it improved the project: both instructions were incorporated
+   directly into the plan before implementation began, so the resulting
+   code (the type-matching rule inside `compare_identifier_namespaces`,
+   and the source_message_index counter built into the full file read-
+   through) reflects them from the start, not as an afterthought.
+   What changed: this shaped src/mcap_inspection/key_analysis.py's design
+   from its first version.
+
+2. Bug caught before the first test run, by the person writing the code
+   reviewing their own work: a function meant to test whether a
+   combination of fields uniquely identifies a record was originally named
+   starting with the word "test_" (matching the project's normal function-
+   naming style for this kind of check-style function). Because it was
+   imported directly into the test file, the test-running tool
+   automatically tried to treat it as an actual test to run -- which
+   failed immediately, since it needed input values the test-runner didn't
+   know to provide.
+   What prompted it: recognizing, while writing the import statement in
+   the test file, that this specific name would collide with how the
+   testing tool discovers what to run.
+   What problem it fixed: this was caught before ever running the tests,
+   avoiding a confusing failure that would otherwise have looked like a
+   real bug in the code being tested.
+   How it improved the project: the function was renamed from
+   `test_composite_key_collisions` to `check_composite_key_collisions`
+   everywhere it appeared, before any tests were run.
+   What changed: src/mcap_inspection/key_analysis.py and
+   tests/test_key_analysis.py.
+
+3. Bug caught before the first script run, again by review rather than by
+   a failure: a leftover fragment of code from an earlier, abandoned
+   approach to tracking which track a detection-reference field belonged
+   to was still sitting in the script. It attempted to look up an item
+   from an empty list, which would have crashed the script with an
+   "index out of range" error the moment it ran.
+   What prompted it: reading back through the newly-written script before
+   running it.
+   What problem it fixed: prevented a guaranteed crash on the very first
+   run.
+   How it improved the project: the leftover fragment was deleted; the
+   correct version of this logic (linking a detection reference back to
+   its owning track) was already implemented properly elsewhere in the
+   same function.
+   What changed: scripts/analyze_keys.py.
+
+4. Classification gap found after the first successful run, by manually
+   reading the real output: a field that legitimately repeats in a clean,
+   expected way (`cv_tracks.tracks.last_associated_detection_id` -- a
+   track restating which detection it's linked to, on every update, with
+   zero suspicious within-message duplicates) was being labeled
+   "unresolved" instead of "expected, because of state history" -- simply
+   because the classification logic had a rule for entity-identity fields
+   and for batch fields, but not for reference/link-style fields showing
+   the exact same clean pattern.
+   What prompted it: reviewing the generated report and noticing this
+   specific, clearly-clean field was not getting credit for its clean
+   behavior.
+   What problem it fixed: without this fix, a reader of the report might
+   have wrongly assumed something was uncertain or suspicious about this
+   field, when the data actually showed a textbook-normal pattern.
+   How it improved the project: a new rule was added covering
+   reference/link-style fields with this same clean repetition pattern,
+   and a dedicated regression test was added to lock the fix in place.
+   What changed: src/mcap_inspection/key_analysis.py
+   (`classify_repetition_expectation`) and tests/test_key_analysis.py.
+
+5. Second classification gap found the same way: a field describing
+   per-message metadata (`radar_detections.metadata.sensor_id`, a single
+   block of information attached once per message, not a list of many
+   items) was being labeled as if it were "one member of a batch of many
+   items" -- a mislabel, because it is a single block, not a repeating
+   list.
+   What prompted it: reviewing the real output and noticing this label
+   did not match what the field actually was.
+   What problem it fixed: without this fix, the report's description of
+   what kind of "row" a field belongs to would have been actively
+   misleading for any field like this across all four topics.
+   How it improved the project: the classification logic was refined to
+   check whether a field's containing block is actually a repeating list
+   or a single block, using information already available from Stage 2's
+   report, before deciding on a label. This was done in a way that did
+   not change the answer for any of the already-correct, already-tested
+   cases.
+   What changed: src/mcap_inspection/key_analysis.py
+   (`classify_field_grain`) and scripts/analyze_keys.py (the code that
+   supplies this new information).
+
+6. Third classification gap found the same way: a field called
+   `detector_id`, describing metadata about a detection *device* (a piece
+   of hardware), was being labeled as if it were part of an actual
+   detection *event* -- purely because its containing block's name,
+   "detectors," happens to contain the letters "detect," the same way the
+   real detection-event block, "detections," does.
+   What prompted it: reviewing the real output and noticing a field about
+   hardware metadata was mislabeled as if it were about a one-time
+   detection event.
+   What problem it fixed: this kind of loose, coincidental name-matching
+   is exactly the trap this whole stage was designed to avoid --the fix
+   makes the tool practice what it preaches.
+   How it improved the project: the check was tightened to only apply the
+   "detection" label to the one specific block already confirmed, from
+   Stage 2's own findings, to be the real detection-event list -- not any
+   block whose name merely contains similar letters. A dedicated
+   regression test was added.
+   What changed: src/mcap_inspection/key_analysis.py
+   (`classify_field_grain`) and tests/test_key_analysis.py.
+
+=========================================================
+FILES CREATED
+=========================================================
+
+src/mcap_inspection/key_analysis.py (391 lines)
+  Purpose: reusable, independently-testable functions for this stage's
+  deeper questions -- classifying what kind of row a field lives on,
+  computing the four-way repetition breakdown, judging whether repetition
+  is expected or not, testing candidate keys for collisions, comparing two
+  fields' value sets with strict type-matching, and analyzing
+  detection-to-track pairs and orphaned references.
+  Inputs: plain Python values collected by scripts/analyze_keys.py (no
+  file access of its own).
+  Outputs: structured Python data (statistics, verdicts, recommendations).
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- not yet committed as of this
+  writing (see Git status below); recommended for commit.
+  Will it be reused later: very likely -- the future ETL stage will likely
+  need the same kind of "is this a duplicate I should worry about" logic
+  when deciding how to load data, and the ID-uniqueness/orphan-detection
+  functions here are directly reusable for validating the loaded database
+  later.
+
+tests/test_key_analysis.py (roughly 400 lines, 36 tests)
+  Purpose: unit tests for every function in key_analysis.py, covering
+  uniqueness counting, within/across-message/timestamp/parent repetition,
+  expected-repetition classification, composite-key collision testing,
+  cross-topic namespace comparison (including the type-mismatch case),
+  detection-to-track pair deduplication, orphan detection, and blank-
+  versus-null handling.
+  Inputs: small, hand-built example data (no dependency on the real
+  57,266-message file, so tests run in a fraction of a second).
+  Outputs: pass/fail test results.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- not yet committed as of this
+  writing; recommended for commit.
+  Will it be reused later: yes -- re-run automatically any time
+  key_analysis.py changes.
+
+scripts/analyze_keys.py (993 lines)
+  Purpose: the orchestration script for this stage -- loads Stage 2's
+  report, re-reads the source file once more to collect the specific
+  paired data this stage's questions need, runs all the analyses, and
+  writes the two report files.
+  Inputs: data/input/sanitized.mcap (read-only) and
+  data/output/mcap_schema_report.json (Stage 2's output, read as a
+  starting point).
+  Outputs: data/output/key_analysis.json and docs/KEY_ANALYSIS.md.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes -- not yet committed as of this
+  writing; recommended for commit.
+  Will it be reused later: yes, both as a re-runnable analysis tool if the
+  source data changes, and as a design reference for the future ETL
+  stage's own detection-to-track and message-identity logic.
+
+docs/KEY_ANALYSIS.md (183 lines)
+  Purpose: the human-readable report for this stage -- concept-discovery
+  results, the per-field 15-point statistics table, persistent-entity
+  analysis, the detection-to-track relationship findings, namespace
+  verdicts, message-identity test results, and the final candidate-key
+  recommendations.
+  Inputs: generated automatically by scripts/analyze_keys.py.
+  Outputs: none (this is itself the output).
+  Generated or handwritten: fully generated; not hand-edited.
+  Should it be committed to git: yes -- not yet committed as of this
+  writing; recommended for commit (this is a project report, not raw
+  source data or a generated database).
+  Will it be reused later: yes -- this document, and this documentation
+  stage itself, both treat it as a primary reference; the future schema
+  design stage will very likely draw its key decisions directly from this
+  file.
+
+data/output/key_analysis.json (generated, machine-readable)
+  Purpose: the same findings as KEY_ANALYSIS.md, in a structured format a
+  program can read back in.
+  Inputs: generated automatically by scripts/analyze_keys.py.
+  Outputs: none (this is itself the output).
+  Generated or handwritten: fully generated.
+  Should it be committed to git: no -- lives under data/output/, which
+  .gitignore excludes, the same as Stage 2's report.
+  Will it be reused later: very likely, by the future ETL/schema stage,
+  the same way Stage 2's JSON report was reused as a direct input here.
+
+=========================================================
+VALIDATION
+=========================================================
+
+- Unit tests (36 tests in tests/test_key_analysis.py, all passing,
+  bringing the whole project's test count to 69 passing tests total):
+  each function was tested with small, deliberately constructed example
+  data covering both normal cases and edge cases (for example: a value
+  that repeats only across messages versus one that repeats within a
+  single message; a field with matching types across two topics versus
+  mismatched types). This matters because it proves the underlying
+  counting and classification logic is correct on cases simple enough to
+  verify by hand, which is the only reliable way to trust more complex
+  results computed later from the full real file.
+
+- Python compilation check on every new file: confirms syntactic
+  correctness before attempting to run anything against real data.
+
+- Running the actual script against the real, full 57,266-message file
+  (multiple times, once per bug fix found by manual review): this is what
+  actually produced the real numbers reported in "What We Discovered"
+  above, and is the strongest evidence that the logic works correctly at
+  full scale, not just on small test cases.
+
+- MD5 checksum re-verification: the source file's checksum, unchanged
+  since Stage 1, was checked again after this stage's script (which reads
+  the entire file a second time, independent of Stage 2's own read) and
+  found to still match exactly. This matters because it directly proves
+  that even a second, independent, full read-through of the file by
+  different code never modified it.
+
+- Manual review of real output, the same practice used in Stage 2: this is
+  specifically what caught the three classification bugs described in the
+  follow-up section. None of these were caught by the automated tests,
+  because the tests (correctly) checked the logic's rules in isolation;
+  they could not, by themselves, catch a case where the rules were
+  logically consistent but did not yet cover a real-world situation
+  (a link-style field with clean repetition; a singular metadata block; a
+  hardware-metadata field with a coincidentally similar name) until that
+  situation was actually seen in the real data.
+
+- git status check, confirming the four new files from this stage remain
+  untracked (not yet committed) and that no unexpected files (like the
+  source data file or a generated database) appear as staged or tracked.
+
+=========================================================
+WHAT WE INTENTIONALLY DID NOT DO
+=========================================================
+
+- Did not create schema.sql, a SQLite database, any ETL/data-loading code,
+  or any analytical SQL views. This was an explicit, direct instruction
+  for this stage, consistent with CLAUDE.md rule #17's ordering (SQLite
+  pipeline work waits until the groundwork is solid) and rule #7 (keys
+  only when justified -- which this stage exists specifically to
+  establish, not to act on yet).
+
+- Did not declare any field a confirmed, final primary key or foreign key.
+  Every recommendation produced is explicitly labeled a candidate,
+  requiring validation, or an estimate -- language chosen deliberately to
+  match the project's instruction not to declare a field a primary key
+  "solely because its name ends in '_id.'"
+
+- Did not attempt to fully answer CLAUDE.md's drone-versus-airplane
+  average track duration question. This stage's detection-to-track
+  analysis is directly relevant groundwork for the first analytical
+  question, but the second question (which depends on object
+  classification data, not just identifiers) was out of this stage's
+  scope.
+
+- Did not modify or extend Stage 2's helpers.py or its report files;
+  Stage 2's outputs were treated strictly as a read-only input to this
+  stage.
+
+These were postponed because this stage's whole purpose was to gather
+enough real evidence to make schema decisions safely later -- attempting
+the schema itself, or the analytical answers, before this evidence existed
+would have meant making exactly the kind of unjustified, name-based
+assumption this stage was built to prevent.
+
+=========================================================
+RISKS OR OPEN QUESTIONS
+=========================================================
+
+- All findings in this stage are based on a single recorded file
+  (data/input/sanitized.mcap). Whether patterns found here (for example,
+  "zero detections are ever linked to more than one track," or "IDs are
+  never reused across topics") would still hold true for a different
+  recording session, or a longer time period, was not and could not be
+  tested -- this is explicitly noted wherever a recommendation depends on
+  it (for example, the note that `detection_id`'s perfect uniqueness is "a
+  snapshot of one sanitized file, not a cross-file guarantee").
+
+- The "strongly supported" (versus "confirmed") relationship verdicts
+  (for example, the sensor_id overlap between `track_states.measurements`
+  and `track_states.sensors`) are based on real value overlap, but not on
+  any explicit structural signal (like a field literally named
+  "measurement_sensor_id") confirming the relationship is intentional
+  rather than coincidental. This distinction was deliberately preserved
+  in the verdict labels rather than smoothed over.
+
+- Whether the apparent data-sanitization pattern found in Stage 2 (many
+  fields always blank) should mean those fields are excluded entirely from
+  a future schema, or included as nullable columns for future use, is a
+  design decision this stage surfaced evidence for but did not make.
+
+- This stage's message-identity conclusion (a generated surrogate key is
+  necessary) depends on this specific file's sequence-number behavior
+  (found in Stage 2 to be degenerate). Whether that is a property of this
+  one file, or a property of every file this recording system ever
+  produces, is unknown from this analysis alone.
+
+=========================================================
+WHAT HAPPENS NEXT
+=========================================================
+
+The next stage (Stage 4, not yet started as of this writing) is where the
+project's instructions (CLAUDE.md/AGENTS.md) call for the actual database
+schema and ETL pipeline to be designed and built. We are ready for it
+because this stage and Stage 2 together have already answered the
+questions a schema design needs answered first: what does the data
+actually contain (Stage 2), and which specific fields are trustworthy
+enough, and related enough, to become real keys (Stage 3). Expected
+inputs to Stage 4: docs/MCAP_INSPECTION.md, docs/KEY_ANALYSIS.md, and both
+JSON reports, used as the evidence base for every schema decision, plus a
+fresh reading of the source file itself for the actual data load. Expected
+outputs: a documented schema (with assumptions explained in
+docs/DESIGN.md, per CLAUDE.md rule #16), and eventually a working,
+idempotent ETL pipeline populating data/output/sentry.db. A known risk
+heading into Stage 4 is that several of this stage's findings (the
+always-empty fields, the orphaned detection references, the lack of a
+natural message-identity key) each require a specific, deliberate design
+decision -- simply ignoring them would silently repeat the same kind of
+unjustified assumption this stage was built to catch.
+
+=========================================================
+INTERVIEW EXPLANATION
+=========================================================
+
+"After the first inspection pass told me what fields existed, I still
+didn't have enough to safely design database keys around any of them --
+just because a field is named 'track_id' in three different places doesn't
+mean it's the same ID system in all three. So this stage was about proving
+that, one way or the other, using the real data instead of the field
+names. I picked out the fields that were actual candidates to become keys,
+and for each one I measured not just 'does it repeat,' but 'does it repeat
+in a way that makes sense' -- a persistent object's ID showing up again and
+again over time is totally normal, but the same ID showing up twice inside
+one single snapshot message is a real red flag. I also refused to compare
+two fields' values unless their underlying data types actually matched --
+a text-based ID and a number-based ID never get silently treated as the
+same thing, even if they happen to share a field name. That discipline
+paid off directly: I found that 'track_id' across three different topics
+in this data are three completely separate ID systems with zero actual
+overlap, despite sharing a name -- exactly the kind of false assumption
+that would have produced a broken join if I'd designed the schema first
+and checked later. I also tested every plausible way of uniquely
+identifying a single raw message against the entire file, not a sample,
+because the earlier stage had already found the file's own built-in
+sequence numbers were basically useless -- and confirmed that no
+combination of the real fields was fully collision-free, which gave me a
+clear, evidence-backed reason to recommend a generated ID instead of
+forcing a natural key that doesn't actually exist. And again, the same
+discipline that caught real issues in the first stage caught more here --
+reading through the actual output by hand surfaced three separate
+classification bugs, including one where a field was mislabeled just
+because its container's name happened to contain similar letters to
+another, unrelated field -- which is a good reminder that even the tool
+built to catch name-based assumptions can accidentally make one itself if
+you're not careful."
+
+=========================================================
+BEGINNER TAKEAWAYS
+=========================================================
+
+- A "primary key" is a column (or combination of columns) in a database
+  table whose value is guaranteed to be different for every single row --
+  it is how the database (and anyone querying it) can reliably say "this
+  row, and only this row." A "foreign key" is a column in one table that
+  points to the primary key of a row in another table, describing a real
+  relationship between them (for example, "this detection belongs to that
+  track"). Both are only trustworthy if they are backed by real, verified
+  uniqueness and real, verified relationships -- which is exactly what
+  this stage set out to check, rather than assume.
+
+- "Normalization" (a term from database design) is the practice of storing
+  each piece of information in exactly one place, and linking related
+  pieces together with keys, instead of repeating the same information
+  over and over in every row. This stage's finding that a track's ID
+  repeats across thousands of update messages is exactly the kind of
+  pattern that motivates normalization: rather than treating every
+  restatement as new information, a well-designed database would store
+  the track's identity once and link each update back to it.
+
+- Two fields having the same name does not mean they refer to the same
+  thing. This stage proved that directly: three different "track_id"-
+  named fields, in three different parts of the data, turned out to be
+  three completely unrelated numbering systems. Always verify a
+  relationship against real data before relying on it -- never assume it
+  from names alone.
+
+- A "surrogate key" is an artificial, made-up ID (often just a counting
+  number) added to a database table purely to guarantee uniqueness, used
+  when nothing in the real, original data can reliably do that job on its
+  own. This stage found exactly that situation for identifying individual
+  raw sensor messages, and recommended a surrogate key as the practical
+  solution.
+
+- An "orphaned reference" is when one piece of data points to another
+  piece of data that doesn't actually exist -- like a track claiming to be
+  linked to a detection ID that was never actually recorded. This is a
+  normal, expected kind of imperfection in real-world data (not a sign the
+  whole dataset is broken), but a database needs to be deliberately
+  designed to handle it (for example, by allowing that link to be empty)
+  rather than assuming it will never happen.
+
+=========================================================
+EXECUTIVE SUMMARY
+=========================================================
+
+Building directly on Stage 2's structural map of the data, this stage went
+deep on the specific fields most likely to matter for future database
+keys, and replaced every name-based assumption with a real, full-dataset
+test. It confirmed that raw CV detection events are genuinely,
+provably unique (1,911 out of 1,911, zero repeats) -- a solid primary-key
+candidate -- while persistent track identifiers repeat in a clean,
+expected pattern consistent with an entity being restated on every update,
+not a data problem. It directly tested, rather than assumed, whether
+same-named fields across different topics ("track_id" in three different
+places) actually refer to the same thing, and proved they do not --
+protecting the future schema from a subtle but serious mistake. It
+measured the real detection-to-track relationship in detail: 1,868 of
+1,911 detections are referenced by exactly one track each, with zero
+detections claimed by more than one track, 4 broken references, and 47
+detections not yet claimed by any track -- concrete, load-bearing numbers
+for the future schema and for one of the project's core analytical
+questions. It also proved that no field in the raw data, alone or
+combined, can reliably and uniquely identify one single source message,
+and recommended a generated ID to fill that gap. As in Stage 2, running
+the real tool against the real data and reading its output by hand (not
+just trusting passing tests) caught several genuine classification bugs,
+including a subtle case where a field was mislabeled purely because of a
+coincidental name similarity -- a useful reminder that avoiding
+name-based assumptions takes active discipline, even in the tool built to
+enforce that discipline. With this evidence in hand, the project now has a
+justified, tested basis for the primary-key, foreign-key, and grain
+decisions the next stage's database schema will need to make.
+
+=========================================================
+PROJECT STATE
+=========================================================
+
+Files created:
+  src/mcap_inspection/key_analysis.py
+  scripts/analyze_keys.py
+  tests/test_key_analysis.py
+  docs/KEY_ANALYSIS.md
+  data/output/key_analysis.json (generated; gitignored, not committed)
+
+Files modified:               None (all new files; Stage 2's files were
+                               read but not changed).
+
+Commands executed (verifiable from terminal history):
+  - .venv/bin/python3 -m pytest tests/test_key_analysis.py -q
+  - .venv/bin/python3 -m pytest -q (full suite, re-run after each fix)
+  - .venv/bin/python3 -m py_compile scripts/analyze_keys.py
+    src/mcap_inspection/key_analysis.py tests/test_key_analysis.py
+  - .venv/bin/python3 scripts/analyze_keys.py (run multiple times, once
+    per bug fix)
+  - md5 data/input/sanitized.mcap (re-verified unchanged)
+  - git status --short / git status (confirmed new files remain
+    untracked; nothing unexpected staged)
+
+Tests executed:                36 new tests in tests/test_key_analysis.py;
+                                69 tests passing across the whole project
+                                (33 from Stage 2 plus 36 from this stage)
+                                on the final run.
+
+Validation results:            py_compile clean; pytest 69/69 passed;
+                                script ran to completion against the real
+                                57,266-message file; MD5 checksum of the
+                                source file unchanged before and after.
+
+Git status at end of stage:    The five files/outputs above are new since
+                                Stage 2's commit (15adf58). As of this
+                                writing, docs/KEY_ANALYSIS.md,
+                                scripts/analyze_keys.py,
+                                src/mcap_inspection/key_analysis.py, and
+                                tests/test_key_analysis.py are untracked
+                                (not yet committed) according to
+                                `git status`; data/output/key_analysis.json
+                                is untracked but gitignored (not expected
+                                to ever be committed). No commit was made
+                                for this stage's work during this session.
+
+Recommended git commit message:
+  "Add identifier, message-grain, and relationship (key) analysis
+
+  Adds scripts/analyze_keys.py and src/mcap_inspection/key_analysis.py to
+  test, against the full source file, which identifier fields are
+  trustworthy candidates for database keys, whether same-named fields
+  across topics actually share a value namespace, how a single source
+  message can be uniquely identified, and the real cardinality of the
+  CV detection-to-track relationship. Builds on the Stage 2 structural
+  report (data/output/mcap_schema_report.json) as an input. Declares no
+  final primary/foreign keys -- all findings are evidence for the future
+  schema design stage. Includes 36 unit tests for the new analysis
+  functions."

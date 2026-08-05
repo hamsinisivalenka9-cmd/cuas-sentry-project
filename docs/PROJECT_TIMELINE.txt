@@ -1,0 +1,297 @@
+=========================================================
+PROJECT TIMELINE -- CUAS Sentry MCAP Data Engineering Project
+Covering Stages 1 through 3
+Generated: 2026-08-05
+=========================================================
+
+This document was generated retrospectively from verified project
+artifacts: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md,
+docs/KEY_ANALYSIS.md, docs/STAGE_01_SUMMARY.txt, docs/STAGE_02_SUMMARY.txt,
+docs/STAGE_03_SUMMARY.txt, data/output/mcap_schema_report.json,
+data/output/key_analysis.json, the project's source code and tests, git
+history, and terminal output still visible in the working session. It
+reads as a running engineering journal -- what happened, in what order, and
+why -- rather than a restatement of any single stage's detailed report.
+Full detail for each stage lives in its own STAGE_0N_SUMMARY.txt file; this
+document is the connective narrative across all of them.
+
+The project's goal, per CLAUDE.md and AGENTS.md (two files with identical
+project instructions), is to build a local Python pipeline that reads
+protobuf-encoded sensor messages from data/input/sanitized.mcap and loads
+them into a SQLite database, structured so that simple analytical
+questions -- like what percentage of camera detections became tracked
+objects -- can be answered with SQL. Twenty explicit "critical rules"
+govern how that must be done, and the first four stages of the project
+(this document covers the first three; the fourth had not yet begun as of
+this writing) exist specifically to satisfy those rules in the right
+order, before any database is designed.
+
+---------------------------------------------------------
+MILESTONE 1 -- Environment and Prerequisite Verification (Stage 1)
+---------------------------------------------------------
+
+What was accomplished:
+Before touching the source data file in any substantial way, the project
+verified that the ground it was standing on was solid: that
+data/input/sanitized.mcap actually exists (5,751,237 bytes) and is
+genuinely in MCAP format (confirmed by reading its 8-byte format header);
+that it is already protected from being committed to git by an existing
+.gitignore rule (confirmed directly with git's own check-ignore command,
+not just by reading the ignore file's text); that a project-specific
+Python virtual environment exists and has all required packages (mcap,
+mcap-protobuf-support, protobuf, pytest) actually installed and
+importable, not just listed; and that Python's built-in SQLite module
+works, including the foreign-key enforcement feature the project's rules
+will require later. An MD5 checksum of the source file was also recorded
+as a baseline fingerprint, specifically so later stages could prove --not
+just claim -- that the file was never modified.
+
+Key discoveries: none about the sensor data itself (that was deliberately
+left to Stage 2) -- only that the environment was genuinely ready: Python
+3.12.6, mcap 1.4.0, protobuf 7.35.1, pytest 9.1.1, SQLite 3.45.3.
+
+Engineering decisions: verify everything read-only, in a dedicated stage,
+before writing any code that touches the source file for real; use git's
+own tooling rather than trusting configuration text; record a checksum as
+independent, reusable proof of "no modification," rather than relying on
+"we only used read-only file modes" as an unverifiable promise.
+
+Follow-up improvements: none -- this stage was a single checklist, and all
+six checks passed on the first attempt.
+
+Files produced: none. This was a purely diagnostic stage.
+
+Validation completed: package import checks, an in-memory SQLite
+functional test (including the foreign-key PRAGMA), a read-only file open
+plus magic-number check, and an MD5 checksum baseline -- later re-verified,
+unchanged, after both following stages.
+
+Commit recommendation: not applicable; no files were created.
+
+---------------------------------------------------------
+MILESTONE 2 -- Read-Only MCAP Structural Inspection (Stage 2)
+---------------------------------------------------------
+
+What was accomplished:
+With the environment confirmed, the project built a read-only tool
+(scripts/inspect_mcap.py, backed by reusable helper functions in
+src/mcap_inspection/helpers.py) whose entire job was to look inside the
+real source file and report what is actually there -- directly satisfying
+CLAUDE.md's rule against designing tables before inspecting real data, and
+its rule against inventing field names. The tool opens the file exactly
+once, reads its built-in summary, samples up to three representative
+messages per topic for structural inspection, and separately decodes every
+one of the 57,266 messages in the file to compute full-dataset statistics.
+Because no protobuf schema compiler was available on this machine, a small
+fake protobuf schema was built directly in Python for the test suite,
+covering every kind of field shape (nested, repeated, enum, map, optional,
+self-referencing) needed to thoroughly test the helper functions without
+depending on the real, much larger data file.
+
+Key discoveries: all four expected topics (cv_detections, cv_tracks,
+radar_detections, track_states) exist, with real message counts of 7,121,
+35,613, 2,902, and 11,630 respectively (57,266 total). Three of the four
+topics turned out to be "batch" messages -- one MCAP message contains a
+whole list of objects -- while track_states is one object-update per
+message; a naive "one message equals one row" assumption would have been
+wrong for most of the data. radar_detections has no separate "radar
+track" structure at all -- each detection carries its own track reference
+inline. A systemic pattern was found of a "legacy" numeric ID field paired
+with a newer, populated string-based ID field with a similar name (for
+example track_id / track_id2), with the legacy numeric version often
+empty. Several specific fields (sensor_id, target_uid, tower_id,
+parent_track_id) were found completely empty across the entire file,
+consistent with deliberate data sanitization -- which also matches the
+source file's own name. The file's own built-in message sequence number
+was found to be degenerate (effectively always the same value). A total of
+39 specific, itemized data-quality risk flags were generated automatically
+from the real data.
+
+Engineering decisions: build small, pure, independently-testable helper
+functions first, then a single orchestrator on top of them, to satisfy the
+project's testing requirement; decode the whole file in a single pass to
+gather both structural samples and full-dataset statistics at once;
+classify each topic's grain (batch vs. single-record) from the real
+decoded shape of the data, not from the topic's name; and, in response to
+a mid-planning follow-up request from the user, split "duplicate value"
+counts into "within one message" (a likely problem) versus "across many
+messages" (often a completely normal pattern for a persistent entity being
+restated over time) -- with every cross-topic relationship guess
+explicitly labeled an estimate, never a declared fact.
+
+Follow-up improvements: the user's follow-up request, made before any
+code was written, added full-dataset uniqueness/duplicate/null statistics
+and the within-vs-across-message duplicate distinction to the plan.
+During implementation, a real bug was found and fixed -- a nested
+Timestamp-type field was being treated as a hashable, comparable value
+because its name matched a "looks like a timestamp" pattern, which crashed
+the script the first time it ran against real data; the fix restricted
+full-dataset statistics to simple scalar/enum fields only. After the first
+successful run, manually reading the output (not just checking that tests
+passed) surfaced a real gap: fields that are always present but always
+empty were not being flagged as a risk at all. Fixing this added two new
+risk categories and grew the risk-flag count from 7 to 39 -- directly
+surfacing the sanitization pattern described above.
+
+Files produced: src/mcap_inspection/__init__.py,
+src/mcap_inspection/helpers.py, scripts/inspect_mcap.py, tests/conftest.py,
+tests/test_mcap_inspection_helpers.py (33 tests), pyproject.toml,
+docs/MCAP_INSPECTION.md, and the generated (gitignored)
+data/output/mcap_schema_report.json.
+
+Validation completed: 33 unit tests passing; a Python syntax/compilation
+check on every new file; running the actual script twice against the real,
+full data file (once to catch the Timestamp crash, once after fixing it,
+and again after the risk-flag fix); and re-verification that the source
+file's MD5 checksum was unchanged after all of this reading.
+
+Commit recommendation: these files were found already committed in the
+repository's history as commit 15adf58, "Add read-only MCAP inspection
+utility" (7 tracked files, 2,895 lines added). That commit was not
+executed by the assistant during this working session; its exact origin
+beyond the commit metadata itself could not be independently verified.
+
+---------------------------------------------------------
+MILESTONE 3 -- Identifier, Message-Grain, and Relationship (Key) Analysis
+(Stage 3)
+---------------------------------------------------------
+
+What was accomplished:
+Building directly on Stage 2's structural report, this stage went much
+deeper on a curated list of roughly 32 identifier-shaped fields most
+likely to matter for future database keys -- replacing every name-based
+assumption from Stage 2 with a real, full-dataset, type-aware test. A
+second reusable module (src/mcap_inspection/key_analysis.py) and
+orchestrator (scripts/analyze_keys.py) were built, following the same
+pure-functions-plus-tests pattern established in Stage 2. The source file
+was read a second time, in one more complete pass, specifically to collect
+paired information (for example, a track's own ID together with the
+detection ID it references, kept together rather than counted separately)
+that Stage 2's simpler statistics could not answer. Every plausible way of
+uniquely identifying one single raw source message was tested against the
+entire file, not a sample.
+
+Key discoveries: cv_detections.detections.detection_id and detection_uid
+are both perfectly unique across the whole file (1,911 of 1,911, zero
+repeats) -- a confirmed, evidence-backed primary-key candidate. Persistent
+track identifiers (cv_tracks.tracks.track_id, track_states.track_id2)
+repeat in exactly the clean pattern expected of a real-world entity being
+restated on every update, with zero suspicious within-message duplicates.
+Despite three different topics all containing a field named "track_id" (or
+a close variant), a direct, type-aware comparison found zero overlapping
+values between any pair of them -- proving, not assuming, that these are
+three separate, unrelated ID systems that merely share a name. Of 1,911
+real CV detections, 1,868 are referenced by a track, with 4 broken
+("orphaned") references, 47 detections never referenced by any track, and
+critically zero detections claimed by more than one different track. No
+field or combination of fields in the raw data -- not even sequence number
+plus timestamp -- was found to uniquely identify a single source message
+across the whole file; only a generated, made-up position counter was
+collision-free. Several genuinely-overlapping cross-topic field pairs
+(such as sensor_id shared between two different sub-structures of
+track_states) were also confirmed with real evidence, and labeled
+"strongly supported" rather than "confirmed," since the field names
+themselves do not explicitly encode the relationship.
+
+Engineering decisions: never compare two identifier fields' values unless
+their exact protobuf type matches, per explicit user instruction, so a
+text-based ID is never silently treated as equivalent to a number-based
+ID; split duplicate-value repetition four ways (within one message, across
+messages, across timestamps, and across parent records) instead of Stage
+2's simpler two-way split, specifically to answer parent-scoped questions
+like "is this detection ever claimed by two different tracks"; test
+message-identity candidates against the full file rather than a sample,
+since uniqueness claims are only meaningful if they hold everywhere; and,
+per explicit user instruction, recommend a generated surrogate key for
+source messages as the deliberate fallback once every natural combination
+was proven, not assumed, to collide.
+
+Follow-up improvements: two explicit refinements from the user
+(preserve exact protobuf type when comparing identifiers; include a
+deterministic source_message_index as the fallback recommendation) were
+folded into the plan before any code was written. Two bugs were caught by
+the author's own review, before ever running anything: a function name
+that accidentally matched the test-discovery tool's naming convention
+(fixed by renaming it), and a leftover fragment of code from an abandoned
+approach that would have crashed on an empty list (fixed by deleting it).
+After the first successful run, manually reading the real output -- the
+same practice that paid off in Stage 2 -- surfaced three further
+classification bugs: a cleanly-repeating reference field being mislabeled
+"unresolved" instead of "expected," a singular per-message metadata field
+being mislabeled as if it were one item in a repeating list, and a
+hardware-metadata field (detector_id) being mislabeled as if it were a
+real detection event, purely because its container's name ("detectors")
+loosely resembled the real detection-event container's name
+("detections"). Each was fixed with a dedicated regression test.
+
+Files produced: src/mcap_inspection/key_analysis.py,
+scripts/analyze_keys.py, tests/test_key_analysis.py (36 tests),
+docs/KEY_ANALYSIS.md, and the generated (gitignored)
+data/output/key_analysis.json.
+
+Validation completed: 36 new unit tests passing (69 passing across the
+whole project); a Python syntax/compilation check on every new file;
+running the actual script against the real, full data file multiple times
+(once per bug fix); and re-verification that the source file's MD5
+checksum remained unchanged, even after this second full read-through of
+the file by entirely different code than Stage 2's.
+
+Commit recommendation: as of this writing, these four files (plus the
+gitignored JSON output) are untracked in git -- not yet committed. A
+suggested commit message: "Add identifier, message-grain, and relationship
+(key) analysis" (full message text is in docs/STAGE_03_SUMMARY.txt).
+
+---------------------------------------------------------
+CROSS-STAGE THEMES
+---------------------------------------------------------
+
+A few patterns held true across all three stages and are worth naming
+explicitly, since they describe how this project has actually been run,
+not just what it has produced so far:
+
+- Verify before building, every time. Stage 1 verified the environment
+  before Stage 2 touched real data; Stage 2 verified the data's real
+  structure before Stage 3 trusted any field name; Stage 3 verified real
+  value overlap before treating any same-named field as related. No stage
+  built on an assumption that could have been checked instead.
+
+- Automated tests and manual review of real output are both necessary, and
+  neither alone was sufficient. In both Stage 2 and Stage 3, the unit
+  tests passed cleanly, and the scripts ran to completion without
+  crashing -- and in both stages, manually reading the actual generated
+  report afterward still caught real, meaningful bugs that no test had
+  been written to catch, because the bugs were gaps in what the logic
+  considered, not violations of a rule that was already being tested.
+
+- Every relationship claim is labeled by confidence, never asserted as
+  fact. From Stage 2's "estimate" disclaimers through Stage 3's
+  confirmed / strongly_supported / weak_heuristic / rejected labels, the
+  project consistently distinguished what the data proves from what the
+  data merely suggests -- directly in service of CLAUDE.md's rule that
+  keys and relationships must be justified by the source data, not assumed
+  from field names.
+
+- The source file itself was never put at risk. Across all three stages,
+  the file was opened only in read-only mode, and its MD5 checksum was
+  checked and re-checked at every stage boundary, always matching. This is
+  concrete, repeatable proof -- not just a claim -- that CLAUDE.md's first
+  rule was honored throughout.
+
+---------------------------------------------------------
+WHAT COMES NEXT
+---------------------------------------------------------
+
+Stage 4 (not yet started as of this writing) is where the project's
+instructions call for the actual database schema and ETL pipeline to be
+designed and built, with assumptions explained in docs/DESIGN.md. The
+project is ready for it: Stage 2 answered "what does the data actually
+contain," and Stage 3 answered "which specific fields are trustworthy
+enough to become real keys, and which apparent relationships actually hold
+up." Open items that Stage 4 will need to make deliberate decisions about,
+rather than default assumptions: how to handle the many always-empty
+fields found (exclude them, or keep them as nullable columns); how to
+handle the 4 orphaned detection references and 47 never-referenced
+detections (reject them, or load them with a nullable/staged link); and
+how to generate and use the surrogate source-message key that Stage 3
+proved was necessary, since nothing in the raw data can fill that role on
+its own.
