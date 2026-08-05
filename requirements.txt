@@ -1,0 +1,10 @@
+iniconfig==2.3.0
+lz4==4.4.5
+mcap==1.4.0
+mcap-protobuf-support==0.5.4
+packaging==26.3
+pluggy==1.6.0
+protobuf==7.35.1
+Pygments==2.20.0
+pytest==9.1.1
+zstandard==0.25.0
