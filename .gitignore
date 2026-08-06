@@ -1,11 +1,19 @@
-# Input and generated data
-data/input/*
-!data/input/.gitkeep
+# =====================================================
+# GENERATED OUTPUT
+# =====================================================
 
+# Ignore generated output by default
 data/output/*
 !data/output/.gitkeep
 
-# Python
+# Keep the generated SQLite database
+!data/output/sentry.db
+
+
+# =====================================================
+# PYTHON
+# =====================================================
+
 .venv/
 __pycache__/
 *.py[cod]
@@ -13,18 +21,38 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Environment files
+
+# =====================================================
+# ENVIRONMENT
+# =====================================================
+
 .env
 .env.*
 
-# IDE and operating system
+
+# =====================================================
+# IDE / OS
+# =====================================================
+
 .DS_Store
 .vscode/settings.json
 
-# Generated databases
+
+# =====================================================
+# DATABASES
+# =====================================================
+
+# Ignore databases everywhere...
 *.db
 *.sqlite
 *.sqlite3
 
-# Logs
+# ...except the final SQLite database
+!data/output/sentry.db
+
+
+# =====================================================
+# LOGS
+# =====================================================
+
 *.log
