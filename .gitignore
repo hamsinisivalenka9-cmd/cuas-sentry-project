@@ -1,13 +1,21 @@
 # =====================================================
+# SOURCE DATA
+# =====================================================
+
+# Never commit the source MCAP file (CLAUDE.md rule 2). It was
+# previously committed by mistake in commit d3df408 and has since been
+# purged from git history (see docs/stages/STAGE_09_UI_AND_NAVIGATION_SUMMARY.txt).
+data/input/*
+!data/input/.gitkeep
+
+
+# =====================================================
 # GENERATED OUTPUT
 # =====================================================
 
 # Ignore generated output by default
 data/output/*
 !data/output/.gitkeep
-
-# Keep the generated SQLite database
-!data/output/sentry.db
 
 
 # =====================================================
@@ -42,13 +50,12 @@ __pycache__/
 # DATABASES
 # =====================================================
 
-# Ignore databases everywhere...
+# Ignore databases everywhere -- including the generated final database,
+# data/output/sentry.db (CLAUDE.md rule 2: never commit the generated
+# SQLite database).
 *.db
 *.sqlite
 *.sqlite3
-
-# ...except the final SQLite database
-!data/output/sentry.db
 
 
 # =====================================================

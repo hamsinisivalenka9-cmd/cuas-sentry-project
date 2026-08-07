@@ -15,7 +15,7 @@ Generated:      2026-08-05
 
 This summary was generated retrospectively from verified project artifacts.
 
-SOURCES USED: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md,
+SOURCES USED: CLAUDE.md, AGENTS.md, docs/data/MCAP_INSPECTION.md,
 data/output/mcap_schema_report.json, the source code of
 scripts/inspect_mcap.py and src/mcap_inspection/helpers.py, the tests in
 tests/test_mcap_inspection_helpers.py and tests/conftest.py, git history
@@ -416,7 +416,7 @@ scripts/inspect_mcap.py (880 lines)
   statistical findings, and writes the two report files.
   Inputs: data/input/sanitized.mcap (read-only).
   Outputs: data/output/mcap_schema_report.json and
-  docs/MCAP_INSPECTION.md.
+  docs/data/MCAP_INSPECTION.md.
   Generated or handwritten: handwritten.
   Should it be committed to git: yes -- already committed, in commit
   15adf58.
@@ -462,7 +462,7 @@ pyproject.toml (3 lines)
   Will it be reused later: yes -- every later test run in this project
   depends on this configuration.
 
-docs/MCAP_INSPECTION.md (1,127 lines)
+docs/data/MCAP_INSPECTION.md (1,127 lines)
   Purpose: the human-readable structural inspection report -- topics
   found, per-topic field catalogs, sample values, identifier statistics,
   relationship estimates, and risk flags.
@@ -571,7 +571,7 @@ RISKS OR OPEN QUESTIONS
   only estimates, based on matching field names and checking whether their
   values overlap -- not a guarantee. Some of these were later confirmed,
   and some were later rejected, once Stage 3 investigated them properly
-  (see docs/STAGE_03_SUMMARY.txt).
+  (see docs/stages/STAGE_03_SUMMARY.txt).
 
 - The apparent sanitization pattern (many fields always empty) is an
   observation, not a confirmed fact about why those fields are empty. It
@@ -603,7 +603,7 @@ produced the field catalog, the batch-vs-single-record classification per
 topic, and the first-pass duplicate/uniqueness numbers that Stage 3 builds
 directly on top of. Expected input: data/output/mcap_schema_report.json
 (this stage's output) plus a fresh, deeper read of the source file itself.
-Expected output: docs/KEY_ANALYSIS.md and data/output/key_analysis.json.
+Expected output: docs/data/KEY_ANALYSIS.md and data/output/key_analysis.json.
 The main risk heading into Stage 3 was that several of this stage's
 relationship estimates were still unverified guesses -- Stage 3's job was
 specifically to either confirm or reject them with real evidence.
@@ -717,7 +717,7 @@ Files created:
   tests/conftest.py
   tests/test_mcap_inspection_helpers.py
   pyproject.toml
-  docs/MCAP_INSPECTION.md
+  docs/data/MCAP_INSPECTION.md
   data/output/mcap_schema_report.json (generated; gitignored, not
     committed)
 

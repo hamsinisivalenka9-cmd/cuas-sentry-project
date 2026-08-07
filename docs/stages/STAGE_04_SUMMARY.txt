@@ -10,18 +10,21 @@ Objective:      Using everything learned in Stages 1-3, design a complete,
                 every primary key, foreign key, and table grain justified
                 by real evidence -- without writing any schema.sql,
                 database file, or ETL code.
-Status:         Complete (documentation only; implementation is Stage 5)
-Generated:      2026-08-05
+Status:         Complete (documentation only; implementation is Stage 5).
+                Reviewed in Stage 5A (docs/architecture/SCHEMA_REVIEW.md) -- see the
+                new "STAGE 5A SCHEMA REVIEW" subsection near the end of
+                this document for what that review found and changed.
+Generated:      2026-08-05 (original); reviewed 2026-08-06
 
 This summary was generated retrospectively from verified project artifacts.
 
-SOURCES USED: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md,
-docs/KEY_ANALYSIS.md, data/output/mcap_schema_report.json,
+SOURCES USED: CLAUDE.md, AGENTS.md, docs/data/MCAP_INSPECTION.md,
+docs/data/KEY_ANALYSIS.md, data/output/mcap_schema_report.json,
 data/output/key_analysis.json, and a small number of additional read-only,
 full-dataset queries run directly against data/input/sanitized.mcap during
 this stage specifically to resolve two open questions (detailed below).
-This stage's own four output documents (docs/DATABASE_DESIGN.md,
-docs/TABLE_GRAIN.md, docs/NORMALIZATION_DECISIONS.md, docs/ERD.md) are
+This stage's own four output documents (docs/architecture/DATABASE_DESIGN.md,
+docs/architecture/TABLE_GRAIN.md, docs/architecture/NORMALIZATION_DECISIONS.md, docs/architecture/ERD.md) are
 also a primary source for this summary, since they contain the full detail
 this document only summarizes.
 
@@ -194,7 +197,7 @@ shrug.
 Future impact: whoever picks up the ETL stage does not need to re-derive
 this investigation from scratch -- the methodology, the fields checked,
 and the reasons each alternative was ruled out are all documented in
-docs/DATABASE_DESIGN.md Section 2.
+docs/architecture/DATABASE_DESIGN.md Section 2.
 
 Decision: Do not enforce parent_object_track_id, the radar cluster
 structure, or radar_detections.track_id as foreign keys.
@@ -301,13 +304,13 @@ FOLLOW-UP PROMPTS AND COURSE CORRECTIONS
 FILES CREATED
 =========================================================
 
-docs/DATABASE_DESIGN.md
+docs/architecture/DATABASE_DESIGN.md
   Purpose: the complete, authoritative schema design -- all 10 tables in
   full detail (columns, types, keys, constraints, indexes, loading order,
   cleaning rules), plus the two investigated discrepancies, alternative
   designs considered, the cleaning plan, analytical-query support, and
   performance discussion.
-  Inputs: docs/MCAP_INSPECTION.md, docs/KEY_ANALYSIS.md, both JSON
+  Inputs: docs/data/MCAP_INSPECTION.md, docs/data/KEY_ANALYSIS.md, both JSON
   reports, CLAUDE.md/AGENTS.md, and the new Stage 4 investigative queries.
   Outputs: none (this is itself the output).
   Generated or handwritten: handwritten (prose and tables), incorporating
@@ -317,11 +320,11 @@ docs/DATABASE_DESIGN.md
   Will it be reused later: yes -- this is the direct blueprint for the
   eventual schema.sql and ETL implementation stage.
 
-docs/TABLE_GRAIN.md
+docs/architecture/TABLE_GRAIN.md
   Purpose: a concise, quick-reference companion stating every table's
   exact "one row represents..." grain and row count in one place, without
   repeating the full column-level detail.
-  Inputs: docs/DATABASE_DESIGN.md.
+  Inputs: docs/architecture/DATABASE_DESIGN.md.
   Outputs: none.
   Generated or handwritten: handwritten.
   Should it be committed to git: yes.
@@ -329,23 +332,23 @@ docs/TABLE_GRAIN.md
   during ETL implementation, when a quick grain check is needed without
   opening the full design document.
 
-docs/NORMALIZATION_DECISIONS.md
+docs/architecture/NORMALIZATION_DECISIONS.md
   Purpose: explains, structure by structure, how every repeated/nested
   protobuf field found in Stage 2 was handled -- turned into a table,
   flattened, stored as JSON, or omitted -- and why; covers 1NF/2NF/3NF,
   the table taxonomy used, and why the design does not go further.
-  Inputs: docs/DATABASE_DESIGN.md, docs/MCAP_INSPECTION.md.
+  Inputs: docs/architecture/DATABASE_DESIGN.md, docs/data/MCAP_INSPECTION.md.
   Outputs: none.
   Generated or handwritten: handwritten.
   Should it be committed to git: yes.
   Will it be reused later: yes -- the reference for defending any "why
   isn't X its own table" question later in the project.
 
-docs/ERD.md
+docs/architecture/ERD.md
   Purpose: a Mermaid entity-relationship diagram of all 10 tables, with
   primary keys, foreign keys, and cardinalities, plus an explicit list of
   candidate relationships considered and deliberately not drawn.
-  Inputs: docs/DATABASE_DESIGN.md.
+  Inputs: docs/architecture/DATABASE_DESIGN.md.
   Outputs: none.
   Generated or handwritten: handwritten (Mermaid syntax).
   Should it be committed to git: yes.
@@ -353,7 +356,7 @@ docs/ERD.md
   the project, and a direct check against schema.sql once it exists (do
   the actual foreign keys match this diagram?).
 
-docs/STAGE_04_SUMMARY.txt
+docs/stages/STAGE_04_SUMMARY.txt
   Purpose: this document -- the Stage 4 engineering journal entry, in the
   same format used for Stages 1-3.
   Inputs: the four documents above, CLAUDE.md/AGENTS.md, prior stage
@@ -361,7 +364,7 @@ docs/STAGE_04_SUMMARY.txt
   Outputs: none.
   Generated or handwritten: handwritten.
   Should it be committed to git: yes.
-  Will it be reused later: yes, as part of docs/PROJECT_TIMELINE.txt if
+  Will it be reused later: yes, as part of docs/project/PROJECT_TIMELINE.txt if
   that document is later extended to cover this stage.
 
 =========================================================
@@ -381,15 +384,15 @@ VALIDATION
   carried over from Stage 2/3) was checked with a fresh, full-dataset,
   read-only query against the real 57,266-message file -- not estimated
   or assumed from a sample. Each such figure is explicitly labeled
-  CONFIRMED with its source in docs/DATABASE_DESIGN.md, and figures that
+  CONFIRMED with its source in docs/architecture/DATABASE_DESIGN.md, and figures that
   were not independently re-verified this way are explicitly labeled
   ASSUMPTION instead, so a reader never has to guess which is which.
 
 - A cross-document consistency check was run after all four design
   documents were written, specifically checking that table names, primary
   keys, foreign keys, grain statements, and row-count figures match
-  exactly everywhere they are repeated across docs/DATABASE_DESIGN.md,
-  docs/TABLE_GRAIN.md, docs/NORMALIZATION_DECISIONS.md, and docs/ERD.md.
+  exactly everywhere they are repeated across docs/architecture/DATABASE_DESIGN.md,
+  docs/architecture/TABLE_GRAIN.md, docs/architecture/NORMALIZATION_DECISIONS.md, and docs/architecture/ERD.md.
   This matters because these four documents intentionally restate the
   same facts from different angles (full detail, quick reference,
   normalization reasoning, visual diagram) -- a mismatch between them
@@ -423,7 +426,7 @@ WHAT WE INTENTIONALLY DID NOT DO
   six required analytical queries justified -- several tempting
   additions (a full position/velocity/covariance model for fused tracks,
   a complete radar debug-metadata model, per-topic frame tables) were
-  explicitly considered and rejected in docs/NORMALIZATION_DECISIONS.md,
+  explicitly considered and rejected in docs/architecture/NORMALIZATION_DECISIONS.md,
   not simply never thought of.
 
 These were postponed or omitted because this stage's job was specifically
@@ -597,15 +600,90 @@ stage produced documentation only, ready to be implemented, reviewed, and
 tested in the next stage.
 
 =========================================================
+STAGE 5A SCHEMA REVIEW (ADDENDUM, 2026-08-06)
+=========================================================
+
+Before any schema.sql or database was implemented, this Stage 4 design
+was put through a skeptical senior-data-engineering review, documented in
+full in docs/architecture/SCHEMA_REVIEW.md and summarized on its own terms in
+docs/stages/STAGE_05A_SUMMARY.txt. This addendum records, briefly, what that
+review changed about this stage's design -- the full reasoning lives in
+those two documents, not repeated here.
+
+Issues found:
+Nine findings, each tagged as a confirmed defect, a design improvement, a
+documentation ambiguity, a performance optimization, or an unresolved
+question (never blended together). The two most substantial: first, the
+ETL loading order implied by this stage's design was incomplete -- it
+never stated that cv_tracks and fused_tracks (both derived from distinct
+values in their own child tables' source data) must be fully populated by
+an upfront scan before any dependent row is inserted, which a naive
+single-pass streaming loader would violate under PRAGMA foreign_keys = ON.
+Second, two fields relevant to the still-unresolved classification
+questions -- cv_tracks.tracks[].class_distribution and
+track_states.object_class_confidence -- had never actually been measured
+before this design chose to omit or ignore them; the review measured both
+directly against the full file for the first time.
+
+Corrections made:
+An explicit two-phase loading strategy was documented (envelope and
+identity tables first, in a complete pass; everything else second) --
+not a relaxation of foreign-key enforcement, per explicit instruction.
+Two redundant secondary indexes (each already covered by an existing
+UNIQUE constraint's automatic index) were removed. Two new columns were
+added: cv_track_states.object_class_confidence and
+fused_track_states.object_class_confidence, both confirmed fully
+populated once actually checked. Two radar columns were renamed,
+azimuth->azimuth_rad and elevation->elevation_rad, after their units were
+empirically confirmed (not previously stated or verified) from observed
+value ranges matching [0, 2*pi]. Several radar columns (range,
+range_rate, snr, filter_type, estimated_width_meters, is_marked) were
+confirmed always-empty/constant across the full file and annotated as
+such. One implicit design choice (that cv_track_states.last_associated_
+detection_id is deliberately not foreign-key-enforced, unlike the
+derived bridge table) was made explicit rather than left for a future
+implementer to infer or get wrong.
+
+Design decisions retained:
+All 10 tables, and all 14 named key/constraint decisions the review was
+asked to re-check, were retained without reversal -- the natural-key
+choices for cv_detections/cv_tracks/fused_tracks, the surrogate-key
+choices for source_messages/cv_track_states/fused_track_states, the
+non-enforcement of the three rejected cross-topic relationships, the
+JSON-not-bridge-table choices for detection_ids_json and cluster_json,
+and the views-not-stored-columns choice for track duration, all held up
+under skeptical review. This was a real finding in itself: a healthy
+review does not need to invent structural changes to justify having
+happened.
+
+Remaining risks:
+The two headline unresolved questions from Stage 4 -- the ~81% CV-
+incorporation target not being reproduced by any evidence-based method,
+and the Drone/Airplane duration question being unanswerable given the
+fused classification enum's actual values -- were re-examined with new
+evidence in this review and were NOT resolved; if anything, the new
+class_distribution evidence reinforces both conclusions rather than
+weakening them. A new, related open question was also surfaced: 18 of
+103 persistent fused tracks genuinely change classification within their
+own history, meaning "the" class of a fused track is itself an
+unresolved modeling decision (five candidate resolution rules were
+compared, and none was chosen, per explicit instruction) -- independent
+of, and in addition to, the Drone/Airplane blocker. Finally, radar
+analysis in this file was found to have a narrower real evidentiary base
+than the original column list implied: once every confirmed-empty field
+is set aside, only azimuth, elevation, track_id, and capture_time carry
+real signal.
+
+=========================================================
 PROJECT STATE
 =========================================================
 
 Files created:
-  docs/DATABASE_DESIGN.md
-  docs/TABLE_GRAIN.md
-  docs/NORMALIZATION_DECISIONS.md
-  docs/ERD.md
-  docs/STAGE_04_SUMMARY.txt
+  docs/architecture/DATABASE_DESIGN.md
+  docs/architecture/TABLE_GRAIN.md
+  docs/architecture/NORMALIZATION_DECISIONS.md
+  docs/architecture/ERD.md
+  docs/stages/STAGE_04_SUMMARY.txt
 
 Files modified:               None.
 
@@ -633,21 +711,21 @@ Tests executed:                None -- this stage produced no code to
 Validation results:            Every population/enum claim newly
                                 introduced in this stage was checked
                                 against the real, full 57,266-message file
-                                and is cited in docs/DATABASE_DESIGN.md;
+                                and is cited in docs/architecture/DATABASE_DESIGN.md;
                                 the cross-document consistency check found
                                 table names, keys, grains, and row counts
                                 aligned across all four documents.
 
 Git status at end of stage:    The five files above are new since Stage
                                 3's work (itself still uncommitted as of
-                                this writing, per docs/STAGE_03_SUMMARY.txt).
+                                this writing, per docs/stages/STAGE_03_SUMMARY.txt).
                                 No commit was made during this session.
 
 Recommended git commit message:
   "Add Stage 4 relational database design documentation
 
-  Adds docs/DATABASE_DESIGN.md, docs/TABLE_GRAIN.md,
-  docs/NORMALIZATION_DECISIONS.md, and docs/ERD.md, documenting a compact,
+  Adds docs/architecture/DATABASE_DESIGN.md, docs/architecture/TABLE_GRAIN.md,
+  docs/architecture/NORMALIZATION_DECISIONS.md, and docs/architecture/ERD.md, documenting a compact,
   10-table SQLite schema derived from the Stage 2/3 structural and key
   analysis. Every primary key, foreign key, and table grain is justified
   by cited evidence; three candidate relationships Stage 3 could not

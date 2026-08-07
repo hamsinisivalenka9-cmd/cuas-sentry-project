@@ -1,13 +1,16 @@
 # Table Grain Reference
 
-Stage 4 deliverable. A quick-reference companion to `docs/DATABASE_DESIGN.md`
-— every table's exact grain statement, source, and row count in one place,
-so "what does one row mean here?" never has to be re-derived from the full
-design document. All row counts are CONFIRMED exact (Stage 2/3, or a
-targeted full-dataset check run during Stage 4 planning — see
-`docs/DATABASE_DESIGN.md` Section 1) unless marked otherwise. This document
+Stage 4 deliverable, reviewed in Stage 5A (`docs/architecture/SCHEMA_REVIEW.md`) — no
+table's grain, PK, or row count changed as a result of that review, so
+this reference document is otherwise unchanged. A quick-reference
+companion to `docs/architecture/DATABASE_DESIGN.md` — every table's exact grain
+statement, source, and row count in one place, so "what does one row
+mean here?" never has to be re-derived from the full design document. All
+row counts are CONFIRMED exact (Stage 2/3, or a targeted full-dataset
+check run during Stage 4 planning or the Stage 5A review — see
+`docs/architecture/DATABASE_DESIGN.md` Section 1) unless marked otherwise. This document
 does not repeat column lists, keys, or constraints — see
-`docs/DATABASE_DESIGN.md` Section 5 for those.
+`docs/architecture/DATABASE_DESIGN.md` Section 5 for those.
 
 Getting a table's grain wrong is one of the most common and most expensive
 mistakes in database design, because every later query, join, and
@@ -46,7 +49,10 @@ frames.
 - Row count: **17**.
 - Kind: static identity/reference table. Contains only the identity column
   — no derived timestamps (see `v_cv_track_summary` in
-  `docs/DATABASE_DESIGN.md` Section 5.11).
+  `docs/architecture/DATABASE_DESIGN.md` Section 5.11).
+- **Loading note (`docs/architecture/SCHEMA_REVIEW.md` finding F2):** must be
+  populated by a complete upfront scan before any `cv_track_states` row
+  is inserted — see `docs/architecture/DATABASE_DESIGN.md` Section 5.12.
 
 ## 4. `cv_track_states`
 
@@ -69,11 +75,11 @@ same association. Not "one row per restatement."
   paired with `cv_tracks.tracks[].track_id`, deduplicated.
 - Row count: **1,868** distinct pairs (out of 1,865 *extra*, non-distinct
   restatements observed on top of that — see
-  `docs/DATABASE_DESIGN.md` Section 5.5).
+  `docs/architecture/DATABASE_DESIGN.md` Section 5.5).
 - Kind: bridge table (many-to-many between `cv_detections` and `cv_tracks`).
 - **Important caveat:** this table's row count is *not* validated as "the"
   answer to CLAUDE.md's ~81% incorporation question — see
-  `docs/DATABASE_DESIGN.md` Section 2 (unresolved discrepancy).
+  `docs/architecture/DATABASE_DESIGN.md` Section 2 (unresolved discrepancy).
 
 ## 6. `radar_detections`
 
@@ -84,6 +90,11 @@ same row rather than as separate linked rows (see Section 6 below).
 - Source: topic `radar_detections`, path `RadarFrame.detections[]`.
 - Row count: **2,929**.
 - Kind: append-only entity table.
+- **Scope note (`docs/architecture/SCHEMA_REVIEW.md` finding F4):** most measurement/
+  classification columns on this table are CONFIRMED constant or empty in
+  this file — only `azimuth_rad`, `elevation_rad` (units confirmed by
+  observed value range), `track_id`, and `capture_time_ns` carry real
+  signal. See `docs/architecture/DATABASE_DESIGN.md` Section 5.6.
 
 ## 7. `fused_tracks`
 
@@ -96,7 +107,10 @@ updates it received.
 - Row count: **103**.
 - Kind: static identity/reference table. Identity + one stable provenance
   attribute (`legacy_track_id`) only — no derived timestamps (see
-  `v_fused_track_summary`, `docs/DATABASE_DESIGN.md` Section 5.11).
+  `v_fused_track_summary`, `docs/architecture/DATABASE_DESIGN.md` Section 5.11).
+- **Loading note (`docs/architecture/SCHEMA_REVIEW.md` finding F2):** same complete-
+  upfront-scan requirement as `cv_tracks` — see
+  `docs/architecture/DATABASE_DESIGN.md` Section 5.12.
 
 ## 8. `fused_track_states`
 
@@ -118,8 +132,8 @@ fused-track state.**
 - Row count: **11,992**.
 - Kind: append-only child table.
 - Nested repeated `detection_ids` are preserved as JSON on this same row,
-  not as a separate table — see `docs/DATABASE_DESIGN.md` Section 5.9
-  and `docs/NORMALIZATION_DECISIONS.md`.
+  not as a separate table — see `docs/architecture/DATABASE_DESIGN.md` Section 5.9
+  and `docs/architecture/NORMALIZATION_DECISIONS.md`.
 
 ## 10. `data_quality_issues`
 
@@ -129,7 +143,7 @@ ETL validation logic — not sourced from any protobuf field.
 - Source: none (ETL-generated).
 - Row count: **0 at schema creation**; grows as ETL validation rules run
   (at minimum 4, for the confirmed orphaned `cv_detection_track_links`
-  references — see `docs/DATABASE_DESIGN.md` Section 5.5).
+  references — see `docs/architecture/DATABASE_DESIGN.md` Section 5.5).
 - Kind: append-only log/audit table.
 
 ---
@@ -142,6 +156,7 @@ ETL validation logic — not sourced from any protobuf field.
 | `cv_detections` | one CV detection event | 1,911 |
 | `cv_tracks` | one persistent CV track | 17 |
 | `cv_track_states` | one CV track's state in one frame | 9,496 |
+| `cv_track_class_distribution` | one ordered class candidate per CV track state | 37,984 |
 | `cv_detection_track_links` | one distinct (detection, track) pair | 1,868 |
 | `radar_detections` | one radar detection reading | 2,929 |
 | `fused_tracks` | one persistent fused track | 103 |
@@ -160,3 +175,11 @@ two identity tables (`cv_tracks`, `fused_tracks`) are tiny (17 and 103
 rows) compared to their own state tables (9,496 and 11,630 rows) — this
 size gap *is* the persistent-entity-vs-update distinction Stage 3
 established, made visible directly in the row counts.
+## 4a. `cv_track_class_distribution`
+
+- Grain: one row per ordered `CVTrack.class_distribution[]` entry for one CV track state.
+- Source: `CVTrackFrame.tracks[].class_distribution[]`.
+- Expected rows: 37,984, exactly four per each of 9,496 parent states.
+- PK: `cv_track_class_distribution_id`.
+- FK: `cv_track_state_id` → `cv_track_states`.
+- `source_order` is zero-based and preserves duplicate classifications.

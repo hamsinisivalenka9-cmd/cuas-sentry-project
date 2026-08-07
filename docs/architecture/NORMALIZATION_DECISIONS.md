@@ -1,9 +1,13 @@
 # Normalization Decisions
 
-Stage 4 deliverable. This document explains, structure by structure, how
+Stage 4 deliverable, reviewed in Stage 5A (`docs/architecture/SCHEMA_REVIEW.md`) — see
+the new rows below for `class_distribution`, `object_class_confidence`,
+`object_class_external`, and the radar unit/population corrections; no
+table's fate (own table / flattened / JSON / omitted) was reversed by the
+review. This document explains, structure by structure, how
 the real nested/repeated protobuf data found in Stage 2/3 was turned into
 (or deliberately kept out of) the 10-table relational design in
-`docs/DATABASE_DESIGN.md`. It also covers the standard normalization forms
+`docs/architecture/DATABASE_DESIGN.md`. It also covers the standard normalization forms
 (1NF/2NF/3NF), the different "kinds" of table used, and why the design
 does not go further than it does. The explicit goal, per instruction, is
 **analytical simplicity, not maximum normalization.**
@@ -26,19 +30,23 @@ to it.
 | `CVTrackFrame.tracks[]` | cv_tracks | yes | → `cv_track_states` table | Repeated, timestamped, genuinely the batch's primary content |
 | `CVTrackFrame.tracks[].track_id` (distinct values) | cv_tracks | n/a (derived) | → `cv_tracks` table | A genuinely new table not present 1:1 in the protobuf — see Section 2 |
 | `CVTrackFrame.tracks[].bounding_box`, `.track_estimate` | cv_tracks | no (1:1) | Flattened (`bounding_box`) / **omitted** (`track_estimate`) | `track_estimate` is a deeply nested pose/velocity structure (4+ levels, dozens of scalar leaves) not needed by any required query — a documented scope decision, not silently dropped (source MCAP remains authoritative) |
-| `CVTrackFrame.tracks[].class_distribution[]` | cv_tracks | yes | **Omitted entirely** | Genuinely repeated, but not needed by any of the 6 required queries; a documented scope decision |
+| `CVTrackFrame.tracks[].class_distribution[]` | cv_tracks | yes | Child table `cv_track_class_distribution`; existing derived `object_class_confidence` retained | Schema version 2 preserves all 37,984 entries, source order, duplicate classifications, raw/name enum values, and exact decoded probabilities. |
+| `TrackState.object_class_confidence` (scalar, not repeated) | track_states | no | → `fused_track_states.object_class_confidence` column | Not previously analyzed in Stage 2/3 or included in the original Stage 4 design at all. CONFIRMED populated on all 11,630 rows (range ~0.50–1.0) during the Stage 5A schema review, `docs/architecture/SCHEMA_REVIEW.md` finding F5 — added as a plain scalar column, zero normalization cost |
+| `TrackState.object_class_external[]` | track_states | yes | **Confirmed correctly omitted** | Originally omitted as a scope decision; CONFIRMED always empty (length 0, all 11,630 rows) during the Stage 5A schema review, `docs/architecture/SCHEMA_REVIEW.md` finding F5 — the original decision was safe, now with evidence rather than assumption |
 | `CVTrackFrame.tracks[].last_associated_detection_id` | cv_tracks | no (scalar) | Kept as a raw column on `cv_track_states` **and** used to derive `cv_detection_track_links` | Both a per-row raw fact (rule 12) and the source of a genuine many-to-many relationship — see Section 3 |
-| `CVTrackFrame.tracks[].parent_object_track_id` | cv_tracks | no (1:1 wrapper) | Flattened to a nullable column, **not FK-enforced** | Stage 3: weak_heuristic, 0 populated — see `docs/DATABASE_DESIGN.md` Section 6 |
+| `CVTrackFrame.tracks[].parent_object_track_id` | cv_tracks | no (1:1 wrapper) | Flattened to a nullable column, **not FK-enforced** | Stage 3: weak_heuristic, 0 populated — see `docs/architecture/DATABASE_DESIGN.md` Section 6 |
 | `CVTrackFrame.trackers[]`, `.assets[]` | cv_tracks | yes | **Omitted entirely** | Companion arrays, CONFIRMED always-empty or near-constant with no analytical value |
 | `RadarFrame.detections[]` | radar_detections | yes | → `radar_detections` table | Distinct entity, no natural id — surrogate PK |
 | `RadarFrame.detections[].cluster[]` | radar_detections | yes (self-type) | `cluster_json` column | CONFIRMED always empty (length 0, all 2,929 rows); no id field exists to build a self-FK from even if populated — see Section 3 |
 | `RadarFrame.detections[].detection_metadata.echoshield.*`, `.spatial_kinematics`, `.debug.*` | radar_detections | mixed | **Omitted entirely** | Deeply nested vendor/debug metadata; not needed by any required query |
+| `RadarFrame.detections[].azimuth`, `.elevation` | radar_detections | no (scalar/wrapper) | Flattened to `azimuth_rad`/`elevation_rad` | Not a repeated-structure decision, but a units-clarity correction, `docs/architecture/SCHEMA_REVIEW.md` finding F4: units were never stated or verified in the original Stage 4 design; CONFIRMED radians from observed value ranges (azimuth `[0.0376, 6.2788]` ≈ `[0, 2π]`), columns renamed accordingly |
+| `RadarFrame.detections[].range`, `.range_rate`, `.snr`, `.filter_type`, `.estimated_width_meters`, `.is_marked` | radar_detections | no (each scalar/wrapper) | Flattened, kept nullable | CONFIRMED (Stage 5A review, full dataset) always `0`/unset/`false` in this file — same "retain as nullable, don't discard structure" treatment as other sanitized fields (rule 12), now with full-dataset evidence rather than being unchecked |
 | `TrackState` (whole message) | track_states | no (not batched) | → `fused_track_states` table | Stage 2 confirmed this topic is `single_entity_or_update`, not batched |
 | `TrackState.track_id2` (distinct values) | track_states | n/a (derived) | → `fused_tracks` table | New table, same reasoning as `cv_tracks` — see Section 2 |
 | `TrackState.measurements[]` | track_states | yes | → `fused_track_measurements` table | Genuinely repeated, directly serves the sensor-contribution query |
 | `TrackState.measurements[].detection_ids[]` | track_states | yes (2 levels deep) | `detection_ids_json` column | Evaluated explicitly — see Section 3 |
 | `TrackState.sensors[]` | track_states | yes | **Omitted entirely** | Redundant summary of `measurements` (same sensor-contribution information, largely overlapping purpose) — kept only one of the two to avoid near-duplicate tables |
-| `TrackState.associated_detections[]`, `.license_plate[]`, `.counts[]`, `.object_class_confidence_distribution[]`, `.max_object_class_confidence[]`, `.identifiers[]`, `.disposition_external[]`, `.object_class_external[]`, `.ranked_camera_feeds[]`, `.signal_summaries[]`, `.track_identity_matches[]` | track_states | yes (each) | **Omitted entirely** | Every one of these was checked in Stage 2/3 evidence and found either always-empty in this file or not needed by any of the 6 required queries; none is silently dropped — each is a documented scope decision, and the source MCAP remains available |
+| `TrackState.associated_detections[]`, `.license_plate[]`, `.counts[]`, `.object_class_confidence_distribution[]`, `.max_object_class_confidence[]`, `.identifiers[]`, `.disposition_external[]`, `.ranked_camera_feeds[]`, `.signal_summaries[]`, `.track_identity_matches[]` | track_states | yes (each) | **Omitted entirely** | Every one of these was checked in Stage 2/3 evidence and found either always-empty in this file or not needed by any of the 6 required queries; none is silently dropped — each is a documented scope decision, and the source MCAP remains available. (`object_class_external[]` has its own dedicated row above, since it received a fresh full-dataset re-check in the Stage 5A schema review rather than only the original Stage 2/3 evidence.) |
 | `TrackState.identity.identity_descriptor[]` (repeated float) | track_states | yes | **Omitted entirely** | A numeric feature vector, not a relational structure — normalizing it into one row per float would add a large table with no analytical use |
 
 ---
@@ -154,7 +162,7 @@ target it could reference (`cv_detections.detection_id`). This was a
 genuine, closer call. **Recommendation: JSON (Option A), not a bridge
 table (Option B).** Reasoning:
 
-- None of the 6 required analytical queries (`docs/DATABASE_DESIGN.md`
+- None of the 6 required analytical queries (`docs/architecture/DATABASE_DESIGN.md`
   Section 9) need a relational join on these specific ids.
 - The relationship this would represent is essentially the Section 2
   detection-incorporation question, asked again from the fused side —
@@ -187,7 +195,7 @@ not as a foreign key into a separate `enum_values` dimension table.
 - **Alternative considered:** one shared `enum_values(enum_type,
   raw_value, name)` table, referenced by FK from every enum column.
 - **Why rejected:** it would add a join to essentially every analytical
-  query in Section 9 of `docs/DATABASE_DESIGN.md` (which currently need
+  query in Section 9 of `docs/architecture/DATABASE_DESIGN.md` (which currently need
   none for this purpose), for a benefit — avoiding duplicate storage of
   short integer/string pairs — that does not matter at this data volume,
   directly contradicting the "no joins without analytical value"
@@ -197,8 +205,8 @@ not as a foreign key into a separate `enum_values` dimension table.
 
 ## 7. Table taxonomy used in this design
 
-The 10 tables fall into five kinds, each with different expected update
-behavior (also stated per-table in `docs/DATABASE_DESIGN.md` Section 5):
+The 11 tables fall into five kinds, each with different expected update
+behavior (also stated per-table in `docs/architecture/DATABASE_DESIGN.md` Section 5):
 
 - **Envelope/provenance table:** `source_messages`. Append-only; every
   other table's traceability back to the raw file runs through here.

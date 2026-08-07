@@ -1,0 +1,276 @@
+STAGE 6 SUMMARY — ETL Pipeline Implementation and Database Population
+=======================================================================
+
+SCOPE
+-----
+Implemented the complete extract -> transform -> load -> validate
+pipeline against the Stage 5B physical schema, and populated
+data/output/sentry.db from data/input/sanitized.mcap. Treated Stage 5B
+(sql/schema.sql, sql/indexes.sql, sql/views.sql, src/cuas_etl/database.py)
+as source of truth throughout. No table was added, removed, renamed,
+split, or merged. No design/schema-change protocol was ever triggered.
+
+RESULT
+------
+Database:        data/output/sentry.db
+Size:             12,996,608 bytes
+Build command:    python scripts/build_database.py --rebuild
+Validate command: python scripts/run_validation.py
+
+Row counts (all match the approved grain in docs/architecture/DATABASE_DESIGN.md):
+  source_messages            57,266
+  cv_detections               1,911
+  cv_tracks                      17
+  cv_track_states              9,496
+  cv_track_class_distribution 37,984
+  cv_detection_track_links     1,864
+  radar_detections             2,929
+  fused_tracks                   103
+  fused_track_states          11,630
+  fused_track_measurements    11,992
+  data_quality_issues              4
+
+Integrity checks:
+  PRAGMA integrity_check     -> ok
+  PRAGMA foreign_key_check   -> ok (0 violations)
+  Source MCAP MD5 checksum   -> e32b641c93b84861d855b01a79ea09d0 (unchanged
+                                 before/after every extraction — the source
+                                 file was never opened for writing)
+  Full validation suite      -> 104/104 checks passed, 0 warnings, 0 fatal
+                                 failures (src/cuas_etl/validation.py,
+                                 sql/validation.sql)
+
+Test suite: 175/175 passed (pytest), covering:
+  tests/test_extract.py            9 tests  (unit + real-MCAP integration)
+  tests/test_transform.py         26 tests  (unit + real-MCAP integration)
+  tests/test_load.py               9 tests  (unit, synthetic fixtures)
+  tests/test_validation.py        17 tests  (unit + real-MCAP integration)
+  tests/test_etl_integration.py    6 tests  (real-MCAP, full pipeline,
+                                              two-independent-rebuild
+                                              determinism)
+  tests/test_schema.py + test_mcap_inspection_helpers.py
+                                  108 tests  (pre-existing Stage 5B / earlier
+                                              stage suites, re-run unchanged)
+
+DATA-QUALITY FINDINGS (never hardcoded — computed at build time)
+------------------------------------------------------------------
+1. CV detection-incorporation rate, computed directly from the loaded
+   database: 1,864 of 1,911 cv_detections rows appear in
+   cv_detection_track_links = 97.54%.
+   This does NOT match CLAUDE.md's stated approximate validation target
+   of ~81%. This discrepancy was investigated and documented in Stage 4/5
+   (docs/architecture/DATABASE_DESIGN.md Section 2) and is reported here again, at
+   build time, as an observed fact — not silently reconciled or forced
+   to match by altering the transform logic.
+
+2. Drone vs. Airplane average fused-track duration: NOT ANSWERABLE from
+   this data as currently classified. proto.tower.TrackObjectClass (the
+   enum backing fused_track_states.object_class_raw/_name) has no DRONE
+   or AIRPLANE value at all (docs/architecture/DATABASE_DESIGN.md Section 3) — this
+   was independently re-confirmed via direct protobuf enum reflection
+   during Stage 4/5A, not assumed. The pipeline does not fabricate a
+   Drone/Airplane mapping to force an answer; v_fused_track_summary
+   (sql/views.sql) provides per-track duration, but resolving "the"
+   object class per track (5 possible semantics identified, none
+   selected — docs/architecture/SCHEMA_REVIEW.md finding F6) remains an explicit,
+   human-decided step outside this pipeline's scope.
+
+3. Timestamp unit bug found and fixed during Stage 6 validation (not a
+   schema issue): fused_track_states.create_timestamp_ns,
+   last_measurement_timestamp_ns, and fused_track_measurements.
+   measurement_timestamp_ns were initially loaded assuming the source
+   protobuf fields were already nanoseconds. check_timestamp_magnitude
+   flagged them as ~1000x too small versus each message's own confirmed-
+   nanosecond log_time_ns. Direct measurement (ratio of each field
+   against log_time_ns) gave exactly 1000.0000000... across every
+   sample, proving the source fields are microseconds. Fixed in
+   src/cuas_etl/transform.py (MICROSECONDS_TO_NANOSECONDS conversion,
+   applied at all 3 call sites) — a transform-layer correction; the
+   destination SQLite column types were already correct. Reported to
+   the user at the time it was found, per the progress-reporting
+   requirement.
+
+4 orphaned detection<->track pairings (last_associated_detection_id
+values with no matching cv_detections row) were excluded from
+cv_detection_track_links and logged in data_quality_issues instead of
+being silently dropped or breaking referential integrity — this count
+matches the 4 CONFIRMED in Stage 3/4.
+
+DETERMINISM
+-----------
+tests/test_etl_integration.py proves two independent, from-scratch
+rebuilds of the database produce identical results for: every row in
+every table (surrogate ids, all field values), the deduplicated
+cv_detection_track_links bridge pairs, the data_quality_issues records
+(excluding detected_at_utc, which is a build-wall-clock timestamp by
+design), and the full validation report's check-by-check output. No
+random UUIDs are used anywhere; every surrogate id is assigned by a
+documented, fixed traversal order over the source file.
+
+ERROR-HANDLING POLICY (as required)
+------------------------------------
+src/cuas_etl/load.py contains no blanket INSERT OR IGNORE and no
+blanket "except sqlite3.IntegrityError: continue" anywhere. The single
+recoverable case (the 4 orphaned bridge pairs) is handled by excluding
+those rows in transform.py before they ever reach load.py — they are
+never presented to SQLite as an insert attempt. Every other constraint
+violation is fatal: the responsible SAVEPOINT is rolled back, the
+table/source_message_id/field/row values are reported via LoadError,
+and the process exits nonzero. A non-rebuild run against an
+already-populated database validates and exits cleanly without
+reloading (see database_already_populated() in load.py).
+
+FILES CHANGED OR ADDED THIS STAGE
+------------------------------------
+New source modules:
+  src/cuas_etl/extract.py
+  src/cuas_etl/transform.py
+  src/cuas_etl/load.py
+  src/cuas_etl/validation.py
+
+New scripts:
+  scripts/build_database.py
+  scripts/run_validation.py
+
+New tests:
+  tests/test_extract.py
+  tests/test_transform.py
+  tests/test_load.py
+  tests/test_validation.py
+  tests/test_etl_integration.py
+
+New documentation:
+  docs/data/DATA_CLEANING.md
+  docs/data/DATA_DICTIONARY.md
+  docs/stages/STAGE_06_SUMMARY.txt (this file)
+
+New data artifact (not committed to design; permitted by .gitignore's
+existing !data/output/sentry.db exception, confirmed pre-existing, not
+added this stage):
+  data/output/sentry.db
+
+Not modified this stage (reused as-is, per instruction to treat Stage
+5B as source of truth):
+  sql/schema.sql, sql/indexes.sql, sql/views.sql, sql/validation.sql
+  src/cuas_etl/database.py
+
+Source MCAP file: never opened for writing, never modified, never
+deleted, never moved. Verified via unchanged MD5 checksum
+(e32b641c93b84861d855b01a79ea09d0) before and after every build/test
+run that reads it.
+
+COMMANDS USED
+-------------
+python scripts/build_database.py --rebuild
+python scripts/run_validation.py
+python -m pytest                       (full suite, 175 passed)
+python -m pytest tests/test_etl_integration.py -v
+python -m py_compile src/cuas_etl/*.py scripts/*.py tests/*.py
+sqlite3 data/output/sentry.db "PRAGMA integrity_check;"
+sqlite3 data/output/sentry.db "PRAGMA foreign_key_check;"
+sqlite3 data/output/sentry.db ".tables"
+
+STOPPING POINT
+--------------
+Per instruction, this stage stops here: populated database, complete
+ETL implementation, passing validation, passing test suite (unit +
+integration + determinism), and the 3 required documents. Docker,
+packaging, deployment, CI/CD, and repository reorganization were not
+started, per explicit instruction not to begin them in this stage.
+
+=======================================================================
+
+SOURCE-FIDELITY CORRECTION — SCHEMA VERSION 2
+----------------------------------------------
+Added four CV detection quality columns and the 37,984-row
+cv_track_class_distribution child table. The correction preserves all repeated
+entries, duplicates, original order, enum raw/name values, and decoded floats.
+It does not change existing grains, keys, bridge logic, timestamps, or checksum
+formulas. See docs/data/SOURCE_FIDELITY_CORRECTION.md. Populated nearby omissions
+(crop_edge_size, mean_lc, CVTrack quality fields, unfiltered_class_name,
+update_uid, and track_estimate) remain explicitly out of scope.
+
+Verification: 193 tests passed; 121 validation checks passed with zero fatal
+failures and zero warnings; integrity_check=ok; foreign_key_check returned no
+violations; raw-to-SQLite comparison matched all 1,911 new scalar mappings and
+all 37,984 ordered child rows; source MD5 remained
+e32b641c93b84861d855b01a79ea09d0. Checksums were unchanged: CV 97.54%, Drone
+mean 35.86s, Airplane mean 614.68s.
+STAGE 6B ADDENDUM — Checksum resolution follow-up
+=======================================================================
+
+SCOPE
+-----
+Following Stage 6, both of CLAUDE.md's expected analytical checksums
+(~81% CV incorporation; ~30s Drone / ~600s Airplane average fused-track
+duration) were investigated across several rounds, consolidated into
+the single canonical docs/analytics/CHECKSUM_RESOLUTION.md (Stage 9 documentation
+cleanup merged two superseded interim investigation documents into it),
+plus this Stage 6B follow-up. This addendum records the two outcomes
+and the small, evidence-supported change implemented as a result. No
+schema table, no ETL transformation, and no bridge-table logic was
+changed for either checksum.
+
+DRONE/AIRPLANE — RESOLVED
+--------------------------
+Root cause: proto.tower.TrackObjectClass (the enum backing
+fused_track_states.object_class_raw/_name) has no DRONE or AIRPLANE
+value at all, confirmed by full protobuf descriptor enumeration. The
+classification is instead carried by measurement provenance — which
+sensor contributed to a track — a field (proto.tower.SensorId, raw
+value 6 = TOWER_SENSOR_TRANSPONDER) already extracted and loaded,
+unchanged, as fused_track_measurements.sensor_id_raw/_name.
+
+Implemented: one new view, v_fused_track_type_basis (sql/views.sql),
+and one new query, queries/fused_track_duration_by_type.sql. No new
+column, no new table, no ETL mapping change.
+
+Classification:
+  Airplane := ever has a TOWER_SENSOR_TRANSPONDER measurement
+  Drone    := never does, AND dominant object_class is
+              OBJECT_CLASS_AIR_VEHICLE or OBJECT_CLASS_UNKNOWN_AIR_VEHICLE
+              (excludes OBJECT_CLASS_BIRD-dominant tracks)
+
+Observed results (arithmetic mean, the statistic the assignment asks
+for — median reported only as supplementary information, never
+substituted):
+  Airplane: n=36, mean 614.68s (target ~600s, +2.4%)
+  Drone:    n=51, mean 35.86s  (target ~30s,  +19.5% — reported
+            honestly; the median, 30.26s, is much closer but is not
+            claimed as "the" answer)
+
+CV INCORPORATION — CLARIFICATION REQUIRED
+-------------------------------------------
+A final semantic search (assignment text, README.md, CLAUDE.md,
+embedded protobuf SourceCodeInfo comments across all 4 schemas'
+FileDescriptorSets, custom/extension field options, MCAP metadata
+records, MCAP attachments) found no explicit source definition of
+"incorporated" beyond what the existing cv_detection_track_links
+derivation already implements. Status-code event counting,
+counter-delta semantics (computed correctly, not summed naively),
+denominator-eligibility fields, frame-level grain, track-birth events,
+and time-alignment matching were all re-tested from raw MCAP data and
+converge on the same 97.54% figure (or 99.95% for the one
+cumulative-sum method explicitly excluded as incorrect). No natural,
+source-supported population of the ~1,538-1,557 size implied by ~81%
+was found. No production change was made. A clarification question for
+Anduril is prepared in docs/analytics/CHECKSUM_RESOLUTION.md.
+
+FILES CHANGED THIS ADDENDUM
+------------------------------
+  sql/views.sql                         (new view added)
+  src/cuas_etl/database.py              (REVIEWED_VIEWS registry updated)
+  queries/fused_track_duration_by_type.sql  (new file)
+  tests/test_checksum_queries.py        (new file, 12 tests)
+  tests/test_schema.py                  (2 tests renamed/extended for
+                                          the third view)
+  docs/architecture/DATABASE_DESIGN.md               (Section 3 and 5.11 updated)
+  docs/data/DATA_DICTIONARY.md               (Views and Common queries updated)
+  docs/analytics/CHECKSUM_RESOLUTION.md           (pre-existing investigation doc,
+                                          authoritative record)
+  docs/stages/STAGE_06_SUMMARY.txt             (this addendum)
+
+Not changed: sql/schema.sql, sql/indexes.sql, src/cuas_etl/extract.py,
+src/cuas_etl/transform.py, src/cuas_etl/load.py,
+src/cuas_etl/validation.py, scripts/build_database.py,
+scripts/run_validation.py.

@@ -1,0 +1,346 @@
+STAGE 7 SUMMARY — Analytical SQL Layer
+=======================================================================
+
+SCOPE
+-----
+Built a reusable, read-only analytical SQL layer on top of the
+completed Stage 6/6B database. No change to sql/schema.sql,
+src/cuas_etl/extract.py, transform.py, load.py, or validation.py.
+Stage 6 remained strictly read-only throughout, as required.
+
+Initial plan proposed 27 candidate queries; per approval, trimmed to
+18 well-designed queries prioritizing quality over quantity, plus the
+pre-existing queries/fused_track_duration_by_type.sql left exactly
+where it is (per explicit instruction not to move/rename an artifact
+existing tests and docs already reference).
+
+Mid-implementation, the design philosophy was revised to prioritize
+cross-table, relationship-driven analytical queries over isolated
+single-table summaries, demonstrating why the data was normalized into
+related entities rather than one flat table. The query set below
+reflects that revision: 5 executive queries were replaced/added
+(cv_detection_to_track_funnel.sql, multi_sensor_tracks_duration_
+comparison.sql), 2 operational queries were deepened with new joins
+(cv_track_history.sql now joins cv_track_class_distribution;
+fused_track_history.sql now joins fused_track_measurements), 2
+operational queries were merged (longest_lived_cv_tracks.sql +
+longest_lived_fused_tracks.sql -> longest_lived_tracks.sql) and one
+added (object_class_changes_over_time.sql), and one technical query
+was replaced with a stronger relational-integrity check
+(publish_vs_log_time_latency.sql -> source_message_child_
+reconciliation.sql, with its finding folded into recording_
+overview.sql instead).
+
+IMPORTANT DESIGN CONSTRAINT HONORED: this project's own Stage 3
+investigation (docs/data/KEY_ANALYSIS.md) confirmed CV-track identity and
+fused-track identity are unrelated namespaces (zero value overlap,
+incompatible types uint64 vs. TEXT). No query in this stage joins the
+CV side to the fused side on any track-id-shaped column, even where a
+generic "detection -> track -> fusion" pipeline diagram might suggest
+one. Where both systems needed to appear together
+(longest_lived_tracks.sql), an explicit UNION ALL with a track_type
+label is used instead of a fabricated join. This is documented
+prominently in docs/analytics/ANALYTICAL_INSIGHTS.md.
+
+FILES CREATED
+-------------
+Queries (18 new, organized by audience):
+  queries/executive/recording_overview.sql
+  queries/executive/cv_incorporation_summary.sql
+  queries/executive/cv_detection_to_track_funnel.sql
+  queries/executive/sensor_utilization_summary.sql
+  queries/executive/multi_sensor_tracks_duration_comparison.sql
+  queries/executive/data_quality_issue_summary.sql
+  queries/operational/cv_track_history.sql
+  queries/operational/fused_track_history.sql
+  queries/operational/sensor_contributions_per_fused_track.sql
+  queries/operational/object_class_changes_over_time.sql
+  queries/operational/cv_focus_quality_vs_incorporation.sql
+  queries/operational/longest_lived_tracks.sql
+  queries/technical/table_row_count_reconciliation.sql
+  queries/technical/duplicate_relationship_check.sql
+  queries/technical/class_distribution_completeness_and_ordering.sql
+  queries/technical/enum_raw_name_consistency.sql
+  queries/technical/zero_duration_or_single_state_tracks.sql
+  queries/technical/source_message_child_reconciliation.sql
+
+Preserved unchanged (per explicit instruction):
+  queries/fused_track_duration_by_type.sql
+
+Scripts:
+  scripts/run_analytics.py — stdlib sqlite3 only, opens the database
+  read-only (mode=ro URI + PRAGMA query_only), discovers every .sql
+  file under queries/, supports --list / --category / --query / --all
+  / --param, prints aligned column output, exits nonzero on any SQL
+  error or missing required parameter.
+
+Tests:
+  tests/test_analytics_runner.py — 30 tests: query discovery, every
+  query executes without error against a freshly-built real database,
+  named result columns, grain spot-checks (including an exact match to
+  Schema Review finding F6's 18-track classification-change count),
+  parameterized-query correctness, a read-only-connection write
+  rejection test, a full before/after table-content diff proving no
+  query mutates the database, independent Python cross-checks of key
+  numerical results, a static check that no query file hardcodes a
+  checksum-target literal, and CLI subprocess smoke tests.
+
+Documentation:
+  docs/analytics/ANALYTICAL_INSIGHTS.md — Key Findings (8 items) plus full
+  12-point documentation (business question, audience, decision
+  supported, why it matters, tables, join path, grain, SQL technique,
+  observed result, plain-English interpretation, assumptions/
+  limitations, why the normalized schema helps) for all 18 new queries.
+  docs/analytics/SQL_QUERY_GUIDE.md — sqlite3 basics, run_analytics.py usage,
+  parameter binding, timestamp-unit and grain reminders, sql/ vs.
+  queries/ vs. scripts/ distinction.
+  docs/stages/STAGE_07_SUMMARY.txt — this file.
+
+FILES MODIFIED
+--------------
+None outside the files listed above. sql/schema.sql, sql/indexes.sql,
+sql/views.sql, sql/validation.sql, and every src/cuas_etl/*.py module
+are unchanged from their Stage 6B state.
+
+QUERY AUDIENCE BREAKDOWN
+-------------------------
+Executive / Program Leadership:  6 queries (4 involve a real multi-
+                                  table JOIN; 2 are intentionally
+                                  simple single-table KPIs)
+Mission Operations Analyst:      6 queries (4 involve a real multi-
+                                  table JOIN or CTE+JOIN; 2 use UNION
+                                  ALL/self-comparison)
+Data Engineer (Technical):       6 queries (validation-style, mostly
+                                  single-table by design -- 1 spans 5
+                                  tables via 4 independent LEFT JOINs)
+General (pre-existing):          1 query (queries/fused_track_
+                                  duration_by_type.sql, unmodified)
+
+VIEWS ADDED THIS STAGE
+------------------------
+None. All 18 new queries use the 3 views already created in Stage 6B
+(v_cv_track_summary, v_fused_track_summary, v_fused_track_type_basis)
+where applicable; no repeated logic across the new queries met the
+bar (used by multiple queries, simplifies otherwise-repetitive SQL,
+does not duplicate persisted data) that would justify a new view.
+
+ANALYTICS RUNNER BEHAVIOR
+----------------------------
+python scripts/run_analytics.py --list
+python scripts/run_analytics.py --category executive
+python scripts/run_analytics.py --category operational
+python scripts/run_analytics.py --category technical
+python scripts/run_analytics.py --query cv_incorporation_summary
+python scripts/run_analytics.py --all
+python scripts/run_analytics.py --query cv_track_history --param track_id=81754
+python scripts/run_analytics.py --query fused_track_history --param fused_track_id=25295F49158-7aa000016009
+
+Read-only by construction (verified by test: a DELETE attempted
+through the runner's connection raises sqlite3.OperationalError:
+"attempt to write a readonly database"). --all against the two
+parameterized queries without --param correctly fails closed (exit
+code 1) rather than silently skipping them.
+
+TESTS ADDED
+-----------
+tests/test_analytics_runner.py: 30 tests (see "Tests" above).
+Total project test count: 223 (193 pre-existing Stage 6/6B + 30 new).
+No existing test file was modified or replaced.
+
+KEY ANALYTICAL FINDINGS (see docs/analytics/ANALYTICAL_INSIGHTS.md for full detail)
+---------------------------------------------------------------------------
+1. CV incorporation: 97.54% (1,864/1,911) -- confirmed stable, matches
+   the protected Stage 6B figure exactly. Does not match the
+   assignment's ~81% target; Anduril reviewed and confirmed no further
+   investigation needed (docs/analytics/CHECKSUM_RESOLUTION.md).
+2. Drone/Airplane: Drone n=51 mean 35.86s (target ~30s, +19.5%,
+   honestly reported); Airplane n=36 mean 614.68s (target ~600s,
+   +2.4%). Unchanged from Stage 6B.
+3. Multi-sensor fused tracks are SHORTER-lived on average than
+   single-sensor tracks (69.92s vs. 255.75s) -- a genuinely
+   counter-intuitive finding, explained by sensor-type confounding
+   (the multi-sensor group is exactly the short-range camera-visible
+   tracks).
+4. CV focus quality strongly correlates with incorporation rate
+   (99.89% SHARP down to 22.22% BLURRY) -- already tested and rejected
+   as an explanation for the CV-incorporation checksum gap, but a
+   genuine standalone sensor-engineering finding.
+5. Exactly 18 of 103 fused tracks change classification during their
+   own lifetime -- an exact match to docs/architecture/SCHEMA_REVIEW.md finding F6,
+   now directly queryable via object_class_changes_over_time.sql.
+6. Zero publish/log-time latency across all 57,266 messages in this
+   recording.
+7. All 6 technical/data-quality queries return a clean (zero-violation)
+   result: row counts match documented grain, zero duplicate bridge
+   pairs, zero incomplete/misordered class-distribution groups, zero
+   enum-resolution inconsistencies across 16 checked column pairs, and
+   zero orphaned source_message_id references across 4 checked tables.
+
+LIMITATIONS
+-----------
+- CV and fused track identities are never joined to each other, per
+  the Stage 3 evidence discussed above -- any future query needing to
+  correlate the two systems would need new source-supported evidence
+  first, not an assumed join.
+- Radar-side analytical value is limited in this specific recording,
+  since most radar_detections fields are CONFIRMED constant/empty
+  (docs/architecture/DATABASE_DESIGN.md Section 5.6) -- flagged as future work in
+  docs/analytics/ANALYTICAL_INSIGHTS.md rather than forced into a query with
+  little to show.
+- object_class_changes_over_time.sql reports the raw classification
+  sequence; it does not resolve "the" correct class per track (5
+  documented resolution semantics exist, none selected).
+- run_analytics.py's parameter-detection regex is a simple heuristic
+  (documented in its own docstring), not a full SQL parser.
+
+VALIDATION RESULTS (this session, after all Stage 7 changes)
+----------------------------------------------------------------
+Rebuild command:    python scripts/build_database.py --rebuild
+Full pytest suite:  223 passed (0 failed)
+PRAGMA integrity_check:    ok
+PRAGMA foreign_key_check:  no violations (empty result set)
+Source MCAP MD5:           e32b641c93b84861d855b01a79ea09d0
+                            (unchanged before and after rebuild)
+All 19 analytical queries (18 new + 1 preserved): executed cleanly via
+  scripts/run_analytics.py across all 3 categories plus the general
+  query, zero errors.
+sql/validation.sql / run_validation.py: 121 checks, 0 warnings, 0
+  fatal failures (unchanged from Stage 6B -- Stage 7 does not touch
+  this).
+
+REMAINING STAGES
+-----------------
+Per the user's own stated stage plan: a final repository-polish stage
+(README.md improvements, optional SHA-256 provenance) remains, not yet
+started, as explicitly deferred. No other stage was named as pending
+at the time of this summary.
+
+RECOMMENDED GIT COMMIT MESSAGE
+----------------------------------
+Add Stage 7 analytical SQL layer: 18 executive/operational/technical
+queries, read-only runner, and documentation
+
+- Add queries/{executive,operational,technical}/ (18 new reusable SQL
+  queries) alongside the preserved queries/fused_track_duration_by_type.sql
+- Add scripts/run_analytics.py: stdlib-only, read-only query runner
+  with --list/--category/--query/--all/--param support
+- Add tests/test_analytics_runner.py (30 tests: discovery, execution,
+  grain, parameterization, read-only enforcement, independent
+  cross-checks, no-hardcoded-answers static check, CLI smoke tests)
+- Add docs/analytics/ANALYTICAL_INSIGHTS.md, docs/analytics/SQL_QUERY_GUIDE.md,
+  docs/stages/STAGE_07_SUMMARY.txt
+- No changes to sql/schema.sql, sql/indexes.sql, sql/views.sql,
+  sql/validation.sql, or any src/cuas_etl/*.py module -- Stage 6/6B
+  remains read-only and unmodified
+- Full suite: 223/223 tests passing; PRAGMA integrity_check ok; PRAGMA
+  foreign_key_check clean; source MCAP checksum unchanged
+
+=======================================================================
+STAGE 7B ADDENDUM -- Cross-dataset gap-fill
+=======================================================================
+
+SCOPE
+-----
+Reviewed the completed Stage 7 library (queries/executive/,
+queries/operational/, queries/technical/, sql/views.sql,
+docs/analytics/ANALYTICAL_INSIGHTS.md) for genuine analytical gaps before writing
+any new SQL. No existing query was redesigned, renamed, reorganized, or
+replaced. Identified 4 gaps; 3 approved and implemented (per the
+explicit 3-query limit), 1 (radar_detections isolation) confirmed as a
+real, evidence-based limitation rather than a fillable gap -- Stage 3
+(docs/data/KEY_ANALYSIS.md) already proved radar_detections.track_id has
+zero overlap with every track-id-family field, so no join from
+radar_detections to any track identity is possible without asserting a
+relationship the evidence rejects.
+
+GAPS IDENTIFIED
+----------------
+1. No query connected CV detection input quality to CV TRACK-level
+   persistence (only to binary incorporation).
+2. No query broke fused-track duration down by the exact sensor
+   combination (only binary multi-/single-sensor).
+3. Classification stability (the 18-of-103 unstable tracks) was
+   reported in isolation, never correlated against an explanatory
+   factor.
+4. radar_detections remains analytically isolated -- confirmed
+   non-fillable, not attempted.
+
+QUERIES ADDED (3, all new joins, none redundant with Stage 7)
+-------------------------------------------------------------------
+queries/operational/cv_detection_quality_vs_track_persistence.sql
+  cv_detection_track_links -> cv_detections -> v_cv_track_summary.
+  Finding: the 2 shortest CV tracks also have the 2 lowest average
+  detection scores and 0% sharp-focus detections; relationship visible
+  at the extremes, not strictly monotonic across all 17 tracks.
+
+queries/executive/fused_track_duration_by_sensor_combination.sql
+  fused_track_measurements -> fused_track_states -> v_fused_track_summary,
+  grouped by the exact sorted set of contributing sensors (not just a
+  count). Finding: exactly 3 combinations exist in this file
+  (TRANSPONDER alone, CAMERA+RADAR, RADAR alone) -- no
+  camera+transponder or radar+transponder pairing ever occurs. This
+  resolves Stage 7's "multi-sensor tracks are shorter-lived" finding:
+  it is not a general multi-sensor effect, it is that the only
+  multi-sensor population (camera+radar) happens to be short-range
+  engagements that never overlap with the long-duration
+  transponder-only population.
+
+queries/operational/fused_track_classification_stability_vs_measurement_support.sql
+  fused_track_states (self-compared via LAG for stability) joined to
+  fused_track_measurements (per-track measurement/sensor counts) joined
+  to v_fused_track_summary (duration). Finding: the 18
+  classification-unstable tracks are NOT under-measured relative to
+  their own (much shorter) lifetimes -- they average slightly MORE
+  distinct sensor types (1.22 vs. 1.06) than the 85 stable tracks. The
+  naive "instability = poor sensor support" hypothesis is not
+  supported.
+
+FILES MODIFIED THIS ADDENDUM
+------------------------------
+  queries/operational/cv_detection_quality_vs_track_persistence.sql (new)
+  queries/executive/fused_track_duration_by_sensor_combination.sql (new)
+  queries/operational/fused_track_classification_stability_vs_measurement_support.sql (new)
+  tests/test_analytics_runner.py (4 new tests + 1 discovery-bound update)
+  docs/analytics/ANALYTICAL_INSIGHTS.md (3 new full 12-point entries, Key Findings
+    #9-11 added, #3 updated with the sensor-combination resolution,
+    Future Work section updated)
+  docs/stages/STAGE_07_SUMMARY.txt (this addendum)
+
+Not modified: sql/schema.sql, sql/indexes.sql, sql/views.sql,
+sql/validation.sql, any src/cuas_etl/*.py module, scripts/run_analytics.py,
+scripts/build_database.py, or any Stage 7 query file.
+
+TESTS ADDED
+-----------
+4 new tests in tests/test_analytics_runner.py:
+  test_cv_detection_quality_vs_track_persistence_covers_every_cv_track
+  test_fused_track_duration_by_sensor_combination_covers_every_fused_track
+  test_fused_track_classification_stability_matches_schema_review_f6
+  test_sensor_combination_query_matches_independent_python_reimplementation
+(plus test_discovery_finds_at_least_fifteen_new_queries' upper bound
+raised from 18 to 21 to account for the 3 new files.)
+Total project test count: 227 (223 prior + 4 new). No existing test
+was modified beyond that one bound.
+
+VALIDATION RESULTS (this addendum)
+---------------------------------------
+Rebuild command:    python scripts/build_database.py --rebuild
+Full pytest suite:  227 passed (0 failed)
+PRAGMA integrity_check:    ok
+PRAGMA foreign_key_check:  no violations
+Source MCAP MD5:           e32b641c93b84861d855b01a79ea09d0 (unchanged)
+All 3 new queries executed cleanly via scripts/run_analytics.py and
+direct sqlite3 invocation; results match the findings reported above
+and in docs/analytics/ANALYTICAL_INSIGHTS.md exactly.
+
+CONFIRMATION
+------------
+- All 18 Stage 7 queries remain byte-for-byte unchanged.
+- All Stage 7 analytical results remain unchanged (verified by re-run).
+- No ETL, schema, or validation logic was modified.
+- The analytical library is now considered complete for this project's
+  scope: 21 reusable queries across 3 audiences plus the protected
+  Drone/Airplane checksum query, a read-only runner, and full
+  documentation. Further additions should be driven by new source
+  evidence or a new stated business question, not by a desire to add
+  more files.

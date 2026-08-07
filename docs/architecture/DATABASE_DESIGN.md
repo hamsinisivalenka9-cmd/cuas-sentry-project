@@ -1,10 +1,14 @@
-# Database Design — CUAS Sentry Sentry SQLite Schema
+# Database Design — CUAS Sentry SQLite Schema
 
-Stage 4 deliverable. This document is a **design**, not an implementation:
-no `schema.sql`, no SQLite database, no ETL code, no views, and no
-analytical SQL are created by this document. It exists so the eventual
-implementation stage has a single, evidence-grounded reference to build
-from.
+Stage 4 deliverable, **revised in Stage 5A** following a skeptical
+schema review (`docs/architecture/SCHEMA_REVIEW.md`). This document is a **design**,
+not an implementation: no `schema.sql`, no SQLite database, no ETL code,
+no views, and no analytical SQL are created by this document. It exists
+so the eventual implementation stage has a single, evidence-grounded
+reference to build from. Passages added or corrected by the Stage 5A
+review are marked inline with a reference to `docs/architecture/SCHEMA_REVIEW.md` and
+its finding id (e.g. "finding F4") — everything else is unchanged from
+the original Stage 4 design.
 
 ## How to read this document
 
@@ -31,9 +35,9 @@ named nearby.
 
 This design is built entirely on:
 
-- `docs/MCAP_INSPECTION.md` and `data/output/mcap_schema_report.json`
+- `docs/data/MCAP_INSPECTION.md` and `data/output/mcap_schema_report.json`
   (Stage 2 — structural inspection of the real file).
-- `docs/KEY_ANALYSIS.md` and `data/output/key_analysis.json` (Stage 3 —
+- `docs/data/KEY_ANALYSIS.md` and `data/output/key_analysis.json` (Stage 3 —
   identifier, grain, and relationship analysis).
 - A small number of additional full-dataset, read-only queries run
   directly against `data/input/sanitized.mcap` during Stage 4 planning,
@@ -41,6 +45,12 @@ This design is built entirely on:
   questions below (each finding below states that it came from this
   targeted Stage 4 check, so it is not confused with a Stage 2/3 report
   number).
+- `docs/architecture/SCHEMA_REVIEW.md` (Stage 5A — a skeptical review of this design,
+  which gathered further full-dataset evidence: `class_distribution` and
+  `object_class_confidence` population; per-track classification-change
+  history; radar unit/population verification; and confirmed the
+  remaining `capture_time_ns` ASSUMPTIONs from the original Stage 4 pass.
+  Passages sourced from this later review are marked inline).
 - `CLAUDE.md` / `AGENTS.md` (identical project rules and the two
   analytical target questions).
 
@@ -159,25 +169,34 @@ CV and fused object classes are interchangeable.
    rows) — **DRONE and AIRPLANE, while representable by the CV schema, are
    never actually used in this file's data.**
 
-4. **Stage 3 already confirmed** (`docs/KEY_ANALYSIS.md`) that CV
+4. **Stage 3 already confirmed** (`docs/data/KEY_ANALYSIS.md`) that CV
    `track_id` and fused `track_id`/`track_id2` are unrelated identifier
    namespaces with zero observed value overlap, so even if a class mapping
    existed, there is no confirmed way to join a CV track's classification
    onto a specific fused track.
 
-### Conclusion
+### Conclusion (superseded by the Stage 6B update below)
 
-This is recorded as **UNRESOLVED**, on two independent grounds: (a) the
-fused/tower classification taxonomy structurally cannot express
-"Drone"/"Airplane" as distinct categories, and (b) even the richer CV
-taxonomy, which can, never actually uses those specific values in this
-file. **Evidence still needed before this question can be answered
-reliably:** either a different source file/session where CV tracks are
-actually classified as Drone or Airplane, or an explicit, documented,
-human-approved mapping from the coarser fused categories (e.g.
-`AIR_VEHICLE`) to "Drone"/"Airplane" — which this project will not invent
-on its own, since doing so would be asserting a fact the data does not
-support.
+This was originally recorded as **UNRESOLVED**, on two independent
+grounds: (a) the fused/tower classification taxonomy structurally
+cannot express "Drone"/"Airplane" as distinct categories, and (b) even
+the richer CV taxonomy, which can, never actually uses those specific
+values in this file. **Evidence still needed before this question can
+be answered reliably:** either a different source file/session where
+CV tracks are actually classified as Drone or Airplane, or an
+explicit, documented, human-approved mapping from the coarser fused
+categories (e.g. `AIR_VEHICLE`) to "Drone"/"Airplane" — which this
+project will not invent on its own, since doing so would be asserting
+a fact the data does not support.
+
+**This conclusion no longer stands as the final word** — see the
+Stage 6B update immediately after the Stage 5A update below. Both
+observations above remain factually correct (no enum used for object
+*classification* anywhere in this file distinguishes Drone from
+Airplane); what changed is that a Stage 6B reinvestigation found the
+classification is carried by a different kind of field entirely
+(sensor measurement *provenance*, not object classification), which
+neither this section's original search nor Stage 5A's had checked.
 
 ### What the schema does about it
 
@@ -189,9 +208,68 @@ Table 7) deliberately does **not** attempt to resolve "the" class for a
 track — that resolution is left as an explicit, documented decision for
 whoever answers this question, informed by the evidence above.
 
+**Stage 5A update (`docs/architecture/SCHEMA_REVIEW.md` findings F5/F6):** the
+schema review re-examined this question with two further checks. First,
+`cv_tracks.tracks[].class_distribution` (a repeated, per-candidate-class
+probability structure, not previously measured) was found fully
+populated across all 9,496 `cv_track_states` rows — but its candidate
+classes are only `BIRD`, `AIR_VEHICLE`, and `UNKNOWN`; DRONE and AIRPLANE
+never receive any probability mass, even as a low-confidence alternative.
+This *reinforces* the conclusion above rather than changing it. Second,
+resolving "the" class of a fused track turns out to be its own open
+sub-problem, independent of the Drone/Airplane blocker: 18 of the 103
+persistent fused tracks genuinely change `object_class` within their own
+history. Five possible resolution semantics are defined and compared,
+without selecting one, in `docs/architecture/SCHEMA_REVIEW.md` Section 4. A new
+`fused_track_states.object_class_confidence` column (CONFIRMED populated
+on all 11,630 rows) was added as a direct result of this investigation —
+see Section 5.8.
+
+**Stage 6B update — RESOLVED (`docs/analytics/CHECKSUM_RESOLUTION.md`):** a
+further reinvestigation, prompted by Anduril's explicit statement that
+the ~30s/~600s checksum is answerable from this exact file, widened
+the search beyond object-*classification* fields to every field whose
+protobuf comment or type suggested "association," "measurement," or
+"sensor" — not just "class." This found that
+`TrackState.measurements[].sensor_id` (enum `proto.tower.SensorId`,
+already loaded, unchanged, as
+`fused_track_measurements.sensor_id_raw`/`.sensor_id_name`) separates
+fused tracks into two populations whose average durations closely
+match the two targets:
+
+- **Airplane** := the track has at least one measurement with
+  `sensor_id_name = 'TOWER_SENSOR_TRANSPONDER'`. Observed: n=36, mean
+  duration 614.68s (target ~600s, +2.4%).
+- **Drone** := the track has no transponder-sourced measurement AND its
+  dominant `object_class_name` is `OBJECT_CLASS_AIR_VEHICLE` or
+  `OBJECT_CLASS_UNKNOWN_AIR_VEHICLE` (excludes `OBJECT_CLASS_BIRD` —
+  a bird is neither a drone nor an airplane). Observed: n=51, mean
+  duration 35.86s (target ~30s, +19.5% — reported honestly, not
+  forced; the median, 30.26s, is much closer but is not substituted
+  for the mean, since the assignment asks for an average).
+
+This required **no schema or ETL change** — `sensor_id` and
+`object_class` were already correctly extracted and loaded; only a new
+view (`v_fused_track_type_basis`, `sql/views.sql`) and a new query
+(`queries/fused_track_duration_by_type.sql`) were added. See
+`docs/analytics/CHECKSUM_RESOLUTION.md` for the full evidence trail, every
+rejected alternative classification/duration/eligibility combination,
+and the honest disclosure of the Drone mean's remaining gap.
+`docs/analytics/CHECKSUM_RESOLUTION.md` is the single canonical checksum
+document — it consolidates what were originally three separate
+investigation-round documents into one.
+
+The CV-incorporation question (Section 2 above) remains unresolved as
+of Stage 6B — a wide semantic search (assignment text, README,
+protobuf `SourceCodeInfo` comments, descriptor options, MCAP metadata
+and attachment records) found no explicit source definition producing
+~81%, and no production change was made for it. See
+`docs/analytics/CHECKSUM_RESOLUTION.md` Part B/C for the complete search and the
+prepared clarification question for Anduril.
+
 ---
 
-## 4. Final table list (10 tables)
+## 4. Final table list (11 tables)
 
 | # | Table | Grain (one row = ) | Row count | Kind |
 |---|---|---|---|---|
@@ -199,6 +277,7 @@ whoever answers this question, informed by the evidence above.
 | 2 | `cv_detections` | one CV detection event | 1,911 (CONFIRMED) | Append-only entity |
 | 3 | `cv_tracks` | one persistent CV track identity | 17 (CONFIRMED) | Static identity/reference |
 | 4 | `cv_track_states` | one CV track's state within one batch frame | 9,496 (CONFIRMED) | Append-only history |
+| 4a | `cv_track_class_distribution` | one ordered `class_distribution[]` entry for one CV track state | 37,984 (CONFIRMED) | Append-only child history |
 | 5 | `cv_detection_track_links` | one distinct (detection, track) pairing | 1,868 (CONFIRMED) | Bridge (many-to-many) |
 | 6 | `radar_detections` | one radar detection reading | 2,929 (CONFIRMED) | Append-only entity |
 | 7 | `fused_tracks` | one persistent fused track identity | 103 (CONFIRMED) | Static identity/reference |
@@ -244,7 +323,7 @@ populated by ETL validation rules as they run.
 
 - **Primary key:** `source_message_id` (surrogate, `INTEGER PRIMARY KEY`
   which SQLite treats as an alias for `rowid`, auto-incrementing).
-  **Why:** Stage 3 (`docs/KEY_ANALYSIS.md`, "Source MCAP message
+  **Why:** Stage 3 (`docs/data/KEY_ANALYSIS.md`, "Source MCAP message
   identity") tested every plausible natural/composite key
   (`topic+sequence`, `channel_id+sequence`, both plus `log_time`) across
   the full 57,266-message file and found **none collision-free** — the
@@ -311,7 +390,11 @@ populated by ETL validation rules as they run.
   natural key (100% unique across the full dataset) — adding a surrogate
   on top would be pure overhead with no benefit (rule 7: use keys only
   when justified; a natural key exists, so a surrogate is not justified
-  here).
+  here). `docs/architecture/SCHEMA_REVIEW.md` finding F8: this 100% uniqueness is a
+  property of the observed data in this one file, not a constraint the
+  protobuf schema itself enforces — retained as the best-supported choice
+  available, with this caveat made explicit for anyone loading a
+  different recording through this schema later.
 - **Candidate natural key:** `detection_id` (accepted, as above) and
   `detection_uid` (also 100% unique, but kept as a UNIQUE column instead
   of the PK, since `detection_id` is the message's native numeric
@@ -348,7 +431,7 @@ populated by ETL validation rules as they run.
   field — populated from the distinct values of
   `CVTrackFrame.tracks[].track_id`).
 - **Source protobuf path:** `CVTrackFrame.tracks[].track_id`.
-- **Why its own table:** Stage 3 (`docs/KEY_ANALYSIS.md`, "Persistent
+- **Why its own table:** Stage 3 (`docs/data/KEY_ANALYSIS.md`, "Persistent
   entity vs. update analysis") CONFIRMED `track_id` behaves as a
   persistent entity identifier (17 distinct values, restated up to 1,676
   times each, zero within-message duplicates). Without this table,
@@ -363,7 +446,14 @@ populated by ETL validation rules as they run.
 | `track_id` | INTEGER | NOT NULL | PK. Native `uint64`. |
 
 - **Primary key:** `track_id` — a CONFIRMED natural key at this grain
-  (distinct persistent identity).
+  (distinct persistent identity) **for this file**. `docs/architecture/SCHEMA_REVIEW.md`
+  finding F8: this uniqueness is a property of the observed data in this
+  one 57,266-message recording, not a constraint the protobuf schema
+  itself enforces — nothing in the `.proto` definition marks `track_id`
+  as unique. The key decision is retained as the best-supported choice
+  available; this caveat exists so a future reader does not mistake
+  "confirmed in this file" for "guaranteed by the schema" when loading a
+  different recording.
 - **Candidate natural key:** `track_id` (accepted).
 - **Surrogate key:** not used — unnecessary given a clean natural key.
 - **Foreign keys:** none (referenced by `cv_track_states` and
@@ -374,8 +464,15 @@ populated by ETL validation rules as they run.
 - **CHECK constraints:** none.
 - **Recommended indexes:** none beyond the PK — a 17-row table needs no
   secondary index.
-- **Loading order:** 3rd (after `cv_detections`; before
-  `cv_track_states`, which FKs to it).
+- **Loading order:** 3rd (after `cv_detections`), but see the new "ETL
+  loading order" subsection, Section 5.12
+  (`docs/architecture/SCHEMA_REVIEW.md` finding F2): this table must be populated by a
+  **complete upfront scan** of every `CVTrackFrame.tracks[].track_id`
+  value in the file — not incrementally, message by message — because
+  `cv_track_states` (loaded next) has an enforced FK to it. A
+  single-pass streaming load that inserts each track's state the moment
+  it is first seen will hit a foreign-key violation on that first
+  appearance, before this table has the id.
 - **Expected update behavior:** static reference/identity table — new
   rows only when a genuinely new persistent track id is first observed;
   existing rows never change.
@@ -417,6 +514,7 @@ populated by ETL validation rules as they run.
 | `bbox_left`, `bbox_top`, `bbox_right`, `bbox_bottom` | REAL | NULLABLE | Flattened 1:1 `BoundingBox`. |
 | `last_associated_detection_id` | INTEGER | NULLABLE | Raw provenance column — the value `cv_detection_track_links` is derived from. Kept here in addition to the bridge table so per-row raw fidelity is never lost (rule 12). |
 | `num_detection_associations` | INTEGER | NULLABLE | **New column, added directly from the Section 2 investigation.** Cumulative counter; enables the cross-check that produced the 99.9% alternative figure to be re-run against the loaded database. |
+| `object_class_confidence` | REAL | NULLABLE | Extracted as the first `class_distribution` entry whose classification matches this state’s primary object class. Retained for compatibility; the complete ordered distribution is now preserved separately. |
 | `score` | REAL | NULLABLE | |
 | `disposition_raw` / `disposition_name` | INTEGER / TEXT | NULLABLE | |
 | `motion_state_raw` / `motion_state_name` | INTEGER / TEXT | NULLABLE | |
@@ -428,7 +526,7 @@ populated by ETL validation rules as they run.
   composite `(source_message_id, track_id)` is CONFIRMED collision-free in
   this file (Stage 2: zero within-message duplicate `track_id` values),
   but per Stage 3's own explicit general guidance ("a surrogate key is
-  still the safer general recommendation" — `docs/KEY_ANALYSIS.md`,
+  still the safer general recommendation" — `docs/data/KEY_ANALYSIS.md`,
   persistent entity analysis), a surrogate is used so a future file that
   happens to violate this composite-uniqueness assumption fails a
   `UNIQUE` constraint (a normal, catchable data-quality event) rather than
@@ -438,7 +536,13 @@ populated by ETL validation rules as they run.
 - **Surrogate key:** yes, `cv_track_state_id`. Justified above.
 - **Foreign keys:** `source_message_id` → `source_messages`; `track_id`
   → `cv_tracks`. `parent_object_track_id` explicitly **not enforced**
-  (Section 6).
+  (Section 6). **`last_associated_detection_id` is also explicitly
+  NOT FK-enforced on this table** (`docs/architecture/SCHEMA_REVIEW.md` finding F1) —
+  unlike `cv_detection_track_links`, which filters out the 4 confirmed
+  orphaned values before insertion, this raw provenance column must
+  accept all values as observed, including the 4 that reference a
+  detection not present in `cv_detections`. Adding an FK here would
+  reject those 4 otherwise-valid track-state rows.
 - **Nullable columns:** everything except the PK and the two required
   FKs plus `log_time_ns` (a raw envelope fact, always present). Every
   nullable column is either an optional protobuf field or one whose
@@ -448,11 +552,20 @@ populated by ETL validation rules as they run.
   `track_age` was established in Stage 2/3.
 - **Recommended indexes:**
   `idx_cv_track_states_track_id(track_id)` (history-over-time, joins to
-  `cv_tracks`); `idx_cv_track_states_source_message(source_message_id)`;
-  `idx_cv_track_states_last_assoc_det(last_associated_detection_id)`
-  (supports the incorporation-percentage query in Section 2).
-- **Loading order:** 4th (after `cv_tracks`, `source_messages`; before
-  `cv_detection_track_links`).
+  `cv_tracks`); `idx_cv_track_states_last_assoc_det(last_associated_detection_id)`
+  (supports the incorporation-percentage query in Section 2);
+  `idx_cv_track_states_object_class(object_class_raw)` (added,
+  `docs/architecture/SCHEMA_REVIEW.md` F5/F6 — supports classification-distribution
+  queries). **`idx_cv_track_states_source_message(source_message_id)` was
+  considered and removed** (`docs/architecture/SCHEMA_REVIEW.md` finding F3): it is
+  redundant with the automatic index SQLite creates for
+  `UNIQUE(source_message_id, track_id)`, which already serves any query
+  filtering on `source_message_id` alone via that constraint's leftmost
+  column.
+- **Loading order:** 4th, but only after `cv_tracks` has been **fully**
+  populated by a complete upfront scan, not incrementally — see the new
+  "ETL loading order" subsection, Section 5.12 (`docs/architecture/SCHEMA_REVIEW.md`
+  finding F2).
 - **Expected update behavior:** append-only history table.
 
 ---
@@ -468,7 +581,7 @@ populated by ETL validation rules as they run.
   process, not present as its own protobuf message).
 - **Why its own table:** Stage 3 explicitly recommended this exact grain
   ("A future detection<->track bridge table's natural grain is one row
-  per (detection_id, persistent track_id) pair" — `docs/KEY_ANALYSIS.md`).
+  per (detection_id, persistent track_id) pair" — `docs/data/KEY_ANALYSIS.md`).
   Without deduplication, the same pairing would be double-counted 1,865
   extra times (CONFIRMED, Stage 3) across every track-update restatement,
   corrupting any incorporation-percentage query.
@@ -533,18 +646,33 @@ populated by ETL validation rules as they run.
 |---|---|---|---|
 | `radar_detection_id` | INTEGER | NOT NULL | Surrogate PK. |
 | `source_message_id` | INTEGER | NOT NULL | FK → `source_messages`. |
-| `capture_time_ns` | INTEGER | NULLABLE | Flattened frame-level timestamp (`RadarFrame.capture_time`, confirmed present in the schema structurally; full-dataset population not independently verified — ASSUMPTION). |
-| `range`, `azimuth` | REAL | NULLABLE | |
-| `elevation`, `range_rate` | REAL | NULLABLE | Flattened from wrapped `DoubleValue`. |
-| `return_strength`, `snr` | REAL | NULLABLE | Flattened from wrapped `DoubleValue`. |
+| `capture_time_ns` | INTEGER | NULLABLE | Flattened frame-level timestamp (`RadarFrame.capture_time`). **CONFIRMED populated in all 2,902 radar_detections messages** (`docs/architecture/SCHEMA_REVIEW.md` finding F4 — upgraded from an ASSUMPTION in the original Stage 4 design to a full-dataset check). |
+| `range` | REAL | NULLABLE | **CONFIRMED (Schema Review, full dataset): always exactly `0.0` across all 2,929 detections in this file** — currently non-discriminating, kept nullable per rule 12 in case a future file populates it. |
+| `azimuth_rad` | REAL | NULLABLE | Renamed from `azimuth` (`docs/architecture/SCHEMA_REVIEW.md` finding F4). **CONFIRMED radians**, not degrees: observed value range `[0.0376, 6.2788]` matches `[0, 2π]` (2π ≈ 6.2832) almost exactly. |
+| `elevation_rad` | REAL | NULLABLE | Renamed from `elevation` (F4). Flattened from wrapped `DoubleValue`. **CONFIRMED radians**: observed range `[0.0066, 0.1975]` (≈0.38°–11.3° if reinterpreted as degrees, an implausibly narrow band for every detection — radians is the consistent reading). |
+| `range_rate` | REAL | NULLABLE | Flattened from wrapped `DoubleValue`. **CONFIRMED (Schema Review, full dataset): never populated** (0 of 2,929) in this file. |
+| `return_strength` | REAL | NULLABLE | Flattened from wrapped `DoubleValue`. Population not independently re-checked in the Schema Review; population status inherited unchanged from Stage 4 (not separately verified). |
+| `snr` | REAL | NULLABLE | Flattened from wrapped `DoubleValue`. **CONFIRMED (Schema Review, full dataset): never populated** (0 of 2,929) in this file. |
 | `track_id` | TEXT | NULLABLE | Raw string. **Explicitly not a foreign key to anything** — Stage 3 CONFIRMED zero value overlap against every CV/fused track_id-family field, including the one pairing with matching types. Kept as a plain, indexed column for grouping only. |
 | `object_type_class_raw` / `_name` | INTEGER / TEXT | NULLABLE | `anduril.ontology.v1.Class`. CONFIRMED (Stage 4 check): always `0` (`CLASS_UNKNOWN`) across all 2,929 rows in this file. |
 | `object_class_raw` / `_name` | INTEGER / TEXT | NULLABLE | `proto.tower.TrackObjectClass` (same enum type as `fused_track_states.object_class`). CONFIRMED (Stage 4 check): always raw `12` (`OBJECT_CLASS_UNCLASSIFIED`, per Stage 2's captured enum value list for this type) across all 2,929 rows. |
-| `filter_type_raw` / `_name` | INTEGER / TEXT | NULLABLE | |
-| `azimuth_sigma`, `elevation_sigma`, `range_sigma`, `range_rate_sigma` | REAL | NULLABLE | Flattened wrapped `DoubleValue`s. |
-| `estimated_width_meters` | REAL | NULLABLE | |
-| `is_marked` | INTEGER | NULLABLE | Boolean, `0`/`1`. |
+| `filter_type_raw` / `_name` | INTEGER / TEXT | NULLABLE | **CONFIRMED (Schema Review, full dataset): always raw `0` (`FILTER_TYPE_UNKNOWN`)** across all 2,929 rows. |
+| `azimuth_sigma`, `elevation_sigma`, `range_sigma`, `range_rate_sigma` | REAL | NULLABLE | Flattened wrapped `DoubleValue`s. Population not independently re-checked in the Schema Review. |
+| `estimated_width_meters` | REAL | NULLABLE | **CONFIRMED (Schema Review, full dataset): never populated** (0 of 2,929) in this file. |
+| `is_marked` | INTEGER | NULLABLE | Boolean, `0`/`1`. **CONFIRMED (Schema Review, full dataset): always `false`** across all 2,929 rows. |
 | `cluster_json` | TEXT | NULLABLE | Compact JSON preserving any cluster-member detail. CONFIRMED (Stage 4 check): the `cluster` repeated field has length 0 for all 2,929 detections in this file — always empty. Kept nullable for schema completeness (rule 12) and because a future file could populate it; **no self-referencing foreign key is created**, because `RadarDetection` has no identifier field of its own to construct a stable reference from, even where `cluster` is populated — see Section 6. |
+
+  **`docs/architecture/SCHEMA_REVIEW.md` finding F4 — important caveat on this table's
+  actual analytical usefulness in this file:** once `range`, `range_rate`,
+  `snr`, `filter_type`, `estimated_width_meters`, `is_marked`,
+  `object_type_class`, `object_class`, and `radar_type` (on the frame,
+  Section 5.6's parent context) are all set aside as CONFIRMED
+  always-constant/empty, **the only genuinely populated, analytically
+  useful fields on this table are `azimuth_rad`, `elevation_rad`,
+  `track_id`, and `capture_time_ns`.** This is recorded as an UNRESOLVED
+  QUESTION about this dataset's radar-analysis scope (Section 11), not a
+  schema defect — every affected column is already nullable, consistent
+  with the sanitized-field handling pattern used throughout this design.
 
   **Deliberately omitted from this table** (documented scope decision, not
   a silent drop): deeply nested vendor/debug metadata
@@ -564,11 +692,15 @@ populated by ETL validation rules as they run.
 - **Foreign keys:** `source_message_id` → `source_messages`. `track_id`
   explicitly **not** a foreign key (Section 6).
 - **Nullable columns:** all measurement/classification columns, since
-  every one is either optional in the protobuf schema or a field whose
-  full population was not independently confirmed (`capture_time_ns`).
+  every one is either optional in the protobuf schema or, per the F4
+  full-dataset checks above, CONFIRMED constant/empty in this file.
 - **UNIQUE constraints:** none beyond the PK.
-- **CHECK constraints:** none imposed — no confirmed valid range for
-  `range`/`azimuth`/etc. was established from evidence gathered.
+- **CHECK constraints:** none imposed — `range`/`range_rate`/`snr` are
+  CONFIRMED always `0.0`/unset in this file (not a "valid range" question
+  at all, since there is no variation to validate against), and no
+  confirmed valid range exists for `azimuth_rad`/`elevation_rad` beyond
+  the single-file observation used to infer their unit (F4) — not
+  sufficient evidence to encode as a `CHECK`.
 - **Recommended indexes:** `idx_radar_detections_source_message(source_message_id)`;
   `idx_radar_detections_track_id(track_id)` (supports radar-side grouping
   despite no FK enforcement).
@@ -613,8 +745,15 @@ populated by ETL validation rules as they run.
 - **CHECK constraints:** none.
 - **Recommended indexes:** none beyond the PK — a 103-row table needs no
   secondary index.
-- **Loading order:** 7th.
+- **Loading order:** 7th, with the same complete-upfront-scan requirement
+  as `cv_tracks` (`docs/architecture/SCHEMA_REVIEW.md` finding F2; see Section 5.12) —
+  every distinct `track_id2` must be inserted here before any
+  `fused_track_states` row referencing it is inserted.
 - **Expected update behavior:** static reference/identity table.
+- **Note on key uniqueness (`docs/architecture/SCHEMA_REVIEW.md` finding F8):** as
+  with `cv_tracks.track_id`, `fused_track_id`'s uniqueness and stable
+  persistent-entity behavior are confirmed for this one file's data, not
+  guaranteed by the protobuf schema itself.
 - **Deliberately NOT stored here:** `first_observed_log_time`,
   `last_observed_log_time`, or `duration`. See the recommended view
   `v_fused_track_summary` in Section 5.11 — and Section 3's warning that
@@ -648,8 +787,9 @@ populated by ETL validation rules as they run.
 | `track_quality` | INTEGER | NULLABLE | CONFIRMED (Stage 4 check): always `0` across all 11,630 rows in this file — currently non-discriminating, kept for schema completeness. |
 | `object_class_raw` / `object_class_name` | INTEGER / TEXT | NULLABLE | `proto.tower.TrackObjectClass`. See Section 3 — CONFIRMED this enum has no DRONE/AIRPLANE value at all. |
 | `disposition_raw` / `disposition_name` | INTEGER / TEXT | NULLABLE | `anduril.ontology.v1.Disposition`. CONFIRMED (Stage 4 check) populated and discriminating: `UNKNOWN`=1,969, `SUSPICIOUS`=1,601, `ASSUMED_FRIENDLY`=7,653, `NEUTRAL`=407. One of the few genuinely useful classification-adjacent fields found on this topic. |
-| `track_status_raw` / `track_status_name` | INTEGER / TEXT | NULLABLE | `proto.tower.TrackStatus`. ASSUMPTION — population not independently re-verified beyond Stage 2 samples. |
+| `track_status_raw` / `track_status_name` | INTEGER / TEXT | NULLABLE | `proto.tower.TrackStatus`. **CONFIRMED (Schema Review, full dataset)**, upgraded from an ASSUMPTION in the original Stage 4 design: populated and discriminating — `TRACK_STATUS_MATURE`=9,669, `TRACK_STATUS_VERIFIED`=1,961; no rows are `UNSPECIFIED`, `IMMATURE`, or `EXPIRED`. |
 | `parent_track_id` | TEXT | NULLABLE | CONFIRMED (Stage 2): always empty across all 11,630 rows in this file. Kept nullable per rule 12; documented as currently unused. |
+| `object_class_confidence` | REAL | NULLABLE | **New column, added by `docs/architecture/SCHEMA_REVIEW.md` finding F5.** Native protobuf field (`object_class_confidence`), not previously included in the Stage 4 design or analyzed in Stage 2/3. **CONFIRMED populated on all 11,630 rows**, observed range ~0.50–1.0. Directly relevant to the classification-semantics comparison in Section 4 of `docs/architecture/SCHEMA_REVIEW.md` (a "highest-confidence class" resolution option is only implementable because this field exists and is populated). |
 
 - **Primary key:** `fused_track_state_id` (surrogate). **Why:** same
   reasoning as `cv_track_states` — `(fused_track_id, log_time_ns)`
@@ -666,10 +806,20 @@ populated by ETL validation rules as they run.
   `log_time_ns`.
 - **UNIQUE constraints:** `UNIQUE(fused_track_id, log_time_ns)`.
 - **CHECK constraints:** none imposed.
-- **Recommended indexes:** `idx_fused_track_states_fused_track_id(fused_track_id)`;
-  `idx_fused_track_states_log_time(log_time_ns)`;
-  `idx_fused_track_states_source_message(source_message_id)`.
-- **Loading order:** 8th (after `fused_tracks`, `source_messages`).
+- **Recommended indexes:** `idx_fused_track_states_log_time(log_time_ns)`;
+  `idx_fused_track_states_source_message(source_message_id)`;
+  `idx_fused_track_states_object_class(object_class_raw)` (added,
+  `docs/architecture/SCHEMA_REVIEW.md` finding F5/F6 — supports classification-
+  distribution and classification-semantics analysis).
+  **`idx_fused_track_states_fused_track_id(fused_track_id)` was
+  considered and removed** (`docs/architecture/SCHEMA_REVIEW.md` finding F3): it is
+  redundant with the automatic index SQLite creates for
+  `UNIQUE(fused_track_id, log_time_ns)`, which already serves any query
+  filtering on `fused_track_id` alone via that constraint's leftmost
+  column.
+- **Loading order:** 8th, but only after `fused_tracks` has been
+  **fully** populated by a complete upfront scan — see Section 5.12
+  (`docs/architecture/SCHEMA_REVIEW.md` finding F2).
 - **Expected update behavior:** append-only history table.
 
 ---
@@ -722,8 +872,9 @@ populated by ETL validation rules as they run.
   analytical queries need a relational join on these ids; this link would
   extend the Section 2 detection-incorporation question onto the fused
   side, which is valuable but not currently requested. Trade-off: Option A
-  keeps the schema at 10 tables and avoids a 2-levels-deep bridge table
-  for a not-yet-required relationship, at the cost that SQL cannot
+  avoids a separate table for a not-yet-required relationship. Schema
+  version 2 has 11 analytical tables because of the independent CV
+  source-fidelity correction. The JSON choice means SQL cannot
   directly join or filter on individual detection ids inside the JSON
   without SQLite's JSON functions. **Upgrade path, if ever needed:** the
   JSON already contains full fidelity, so promoting it to a real
@@ -817,7 +968,72 @@ new states are appended (an append-only history table is, by definition,
 always growing). A view recomputes from the current state rows every
 time, so the duplicated fact can never become inconsistent with its
 source. **`v_fused_track_summary` deliberately does not attempt to
-resolve "the" object class for a track** — see Section 3.
+resolve "the" object class for a track** — see Section 3, and, per
+`docs/architecture/SCHEMA_REVIEW.md` finding F6, the classification-semantics
+comparison in that document's Section 4, which defines and compares five
+possible resolution rules (class at first observation, class at last
+observation, most frequent class, highest-confidence class, and
+class-interval splitting) without selecting one. Whichever semantic is
+chosen later needs its own query-time or view-time resolution logic
+beyond `v_fused_track_summary` as specified here — see the corrected
+Section 9, query #2, below.
+
+**On timestamp precision (`docs/architecture/SCHEMA_REVIEW.md` finding F7):** the
+`/ 1e9` conversion above is safe because `log_time_ns` is stored as
+SQLite `INTEGER` (a signed 64-bit integer, maximum
+9,223,372,036,854,775,807), and the observed `log_time_ns` range in this
+file (~1.76×10^18) has roughly 5.2× headroom before any overflow risk —
+confirmed by direct arithmetic, not assumed. See Section 12.
+
+**Stage 6B addendum — a third view, `v_fused_track_type_basis`,**
+was added (`sql/views.sql`, actually created this time, not just
+described) to resolve the Drone/Airplane checksum question — see the
+Stage 6B update in Section 3 above and `docs/analytics/CHECKSUM_RESOLUTION.md`
+for full evidence. It follows the same "view, not stored column"
+reasoning as the two views above: `has_transponder_measurement` and
+`dominant_object_class_name` are both derived facts that could change
+if more `fused_track_measurements`/`fused_track_states` rows were
+appended for a track, so they are computed live, not stored.
+
+### 5.12 ETL loading order (`docs/architecture/SCHEMA_REVIEW.md` finding F2)
+
+`PRAGMA foreign_keys = ON` (CLAUDE.md rule 8) must be active throughout
+loading, and the schema is fully loadable under it — but only if the two
+derived identity tables (`cv_tracks`, `fused_tracks`) are populated as
+**complete, upfront scans**, not incrementally during the same pass that
+loads their dependent state tables. **Recommended concrete strategy: a
+two-phase load**, not a relaxation of foreign-key enforcement:
+
+- **Phase 1 — envelope and identities.**
+  1. Read the entire file once; insert every message's envelope into
+     `source_messages` (all 4 topics).
+  2. From the same read (or the decoded `cv_tracks`/`track_states`
+     messages already in hand), collect every distinct
+     `CVTrackFrame.tracks[].track_id` value and insert each into
+     `cv_tracks`; collect every distinct `TrackState.track_id2` value
+     (with its paired `track_id`) and insert each into `fused_tracks`.
+     Both identity tables are now **complete**.
+- **Phase 2 — everything else.** With both identity tables fully
+  populated, load, in any order that respects the remaining FKs:
+  `cv_detections` → `cv_track_states` → `cv_detection_track_links`;
+  `radar_detections`; `fused_track_states` → `fused_track_measurements`;
+  finally `data_quality_issues`, once validation against the other 9
+  tables has run.
+
+**Why this, and not disabling enforcement:** a naive single-pass
+streaming implementation — decode a `cv_tracks` message, insert its
+tracks into `cv_track_states` as they're seen — inserts a state row
+referencing a `track_id` on its *first* appearance, before that id exists
+in `cv_tracks`, which fails immediately under `PRAGMA foreign_keys = ON`.
+The two-phase strategy above requires no constraint relaxation at any
+point. (An implementer who strongly prefers single-pass streaming over
+two explicit phases could instead use `PRAGMA defer_foreign_keys = ON`,
+scoped to a single transaction, to defer constraint checking until commit
+— noted here as a valid alternative technique, not the primary
+recommendation, since it trades explicit, easy-to-reason-about ordering
+for transaction-scoped deferred-checking semantics.) See
+`docs/architecture/SCHEMA_REVIEW.md` Section 3 for the full step-by-step test of this
+strategy against all 11 tables.
 
 ---
 
@@ -829,7 +1045,7 @@ resolve "the" object class for a track** — see Section 3.
 | `cv_detections.parent_object_detection_id` → `cv_detections.detection_id` | Unenforced candidate | Stage 3 (`key_analysis.json`): 0 populated occurrences | Nullable column, no FK constraint |
 | `radar_detections` cluster self-reference | Rejected as an FK | Stage 4 check: `cluster` length is 0 for all 2,929 rows; `RadarDetection` has no id field to reference even if populated | `cluster_json`, no self-FK column at all |
 | `radar_detections.track_id` ↔ `cv_tracks.track_id` / `fused_tracks.fused_track_id` | Rejected | Stage 3: zero observed value overlap in every tested pairing, including the one pairing with matching types | Plain indexed `TEXT` column, no FK |
-| `track_states.track_identity_matches.matched_track_id(2)` → `fused_tracks` | Not modeled | Stage 3: field CONFIRMED always empty in this file; not included in the compact 10-table design at all | Omitted entirely (see `docs/NORMALIZATION_DECISIONS.md`) |
+| `track_states.track_identity_matches.matched_track_id(2)` → `fused_tracks` | Not modeled | Stage 3: field CONFIRMED always empty in this file; not included in the compact 10-table design at all | Omitted entirely (see `docs/architecture/NORMALIZATION_DECISIONS.md`) |
 
 ---
 
@@ -894,7 +1110,7 @@ table), with no `cv_tracks`/`fused_tracks` identity tables and no
 | Enum normalization | every `_raw`/`_name` column pair | Preserve the exact source integer (rule: don't invent data) alongside a human-readable name resolved from the real protobuf enum definition (never invented) | Both columns retained; no row rejected |
 | Duplicate/repeated-state handling | `cv_track_states`, `fused_track_states` | Stage 2/3 confirmed this repetition is the *expected* shape of persistent-entity state history, not a defect | Retained — this is the intended grain, not something to deduplicate |
 | Repeated-association handling | `cv_detection_track_links` | The same (detection, track) pairing legitimately repeats 1,865 times (Section 5.5) across track updates | Deduplicated at load time into one row per distinct pair; raw repetition remains visible via `cv_track_states.last_associated_detection_id` |
-| Range/type validation | numeric columns generally | No confirmed valid range was established in Stage 2/3 for most numeric fields (score, range, azimuth, etc.) | No `CHECK` constraints imposed without evidence; out-of-range values, if ever found, would be a future `data_quality_issues` finding, not silently corrected |
+| Range/type validation | numeric columns generally | No confirmed valid range was established for most numeric fields (`score`, `azimuth_rad`, etc.); `range`/`range_rate`/`snr` are CONFIRMED always `0.0`/unset in this file (Schema Review, F4) | No `CHECK` constraints imposed without evidence; out-of-range values, if ever found, would be a future `data_quality_issues` finding, not silently corrected |
 | CV incorporation percentage | `cv_detection_track_links` / `cv_detections` | Section 2 — the ~81% target is not reproduced by any evidence-supported definition | **Not corrected to match 81%.** Reported as computed (~97.8%–99.9% depending on method), with the discrepancy itself recorded as a `data_quality_issues`-style finding at the analysis level, not the row level |
 
 ---
@@ -905,10 +1121,27 @@ table), with no `cv_tracks`/`fused_tracks` identity tables and no
    `COUNT(DISTINCT detection_id) FROM cv_detection_track_links` — one
    table each, no joins. (See Section 2 for why the *interpretation* of
    this number is still open.)
-2. **Fused-track duration by class:** `v_fused_track_summary` (Section
-   5.11) joined to `fused_track_states.object_class_raw`/`_name` — one
-   view, one table, `GROUP BY`. (See Section 3 for the class-resolution
-   caveat.)
+2. **Fused-track duration by class — corrected, `docs/architecture/SCHEMA_REVIEW.md`
+   finding F6:** the original claim here ("one view, one table,
+   `GROUP BY`") understated the real complexity and has been corrected.
+   `object_class` is recorded **per state row**, not per persistent
+   track — CONFIRMED (Schema Review): 18 of 103 fused tracks (17.5%)
+   show more than one distinct `object_class` across their own history,
+   including genuine sustained transitions, not only single-frame noise.
+   "The" class of a track is therefore not a given fact; it must be
+   *resolved* by an explicit, chosen rule before `v_fused_track_summary`
+   (Section 5.11) can be meaningfully grouped by class. Five candidate
+   resolution rules are defined and compared, without selecting one, in
+   `docs/architecture/SCHEMA_REVIEW.md` Section 4 (class at first observation, class
+   at last observation, most frequent class, highest-confidence class —
+   now implementable given `object_class_confidence` is CONFIRMED
+   populated on all 11,630 rows, Schema Review finding F5 — or
+   class-interval splitting). Whichever rule is chosen requires its own
+   small resolution query or table beyond `v_fused_track_summary` as
+   currently specified; this is real, evidence-confirmed complexity, not
+   a one-line `GROUP BY`. (See Section 3 for the separate, more
+   fundamental blocker: no resolution rule can produce a Drone or
+   Airplane answer, because the enum has no such values.)
 3. **Message counts by topic:** `GROUP BY topic` on `source_messages`
    alone.
 4. **Track history over time:** `SELECT * FROM cv_track_states WHERE
@@ -919,8 +1152,10 @@ table), with no `cv_tracks`/`fused_tracks` identity tables and no
 6. **Data quality reporting:** `SELECT * FROM data_quality_issues` — one
    table, no joins at all.
 
-No required query needs more than a two-table join plus, at most, one of
-the two recommended views.
+Five of the six required queries need no more than a two-table join, at
+most one view, and no additional resolution logic. Query #2 is the
+documented exception, and is now described accurately rather than
+optimistically.
 
 ---
 
@@ -951,21 +1186,50 @@ the two recommended views.
 
 ---
 
-## 11. Unresolved risks (see also Sections 2 and 3)
+## 11. Unresolved risks (see also Sections 2, 3, and `docs/architecture/SCHEMA_REVIEW.md`)
 
 - The ~81% CV-incorporation target is not reproduced by any evidence-
-  supported definition (Section 2) — requires human/business clarification.
+  supported definition (Section 2), including the additional
+  `class_distribution`/`object_class_confidence` evidence gathered during
+  the Stage 5A schema review — requires human/business clarification.
 - The Drone-vs-Airplane duration question cannot currently be answered:
   the fused classification enum cannot represent those categories at all,
-  and even CV's richer enum never uses them in this file (Section 3).
+  and even CV's richer enum — including its full 4-candidate
+  `class_distribution`, checked directly in the Stage 5A schema review —
+  never assigns them any probability in this file (Section 3;
+  `docs/architecture/SCHEMA_REVIEW.md` finding F5). Which classification-resolution
+  semantic to use for "the" class of a track (Section 4 of
+  `docs/architecture/SCHEMA_REVIEW.md`) is a second, independent open question, since
+  18 of 103 fused tracks genuinely change class over their own history
+  (`docs/architecture/SCHEMA_REVIEW.md` finding F6) — no rule is chosen here.
 - `radar_detections.track_id`'s true meaning is unknown — CONFIRMED
   unrelated to every other track-identifier namespace in the file, but
   its own semantics were not otherwise recoverable from the schema.
-- `capture_time_ns` population (on `cv_detections`, `cv_track_states`,
-  `radar_detections`) is an ASSUMPTION based on 3 structural samples per
-  topic (Stage 2), not a full-dataset scan — should be re-verified during
-  ETL implementation before being relied upon as reliably populated.
+- **`radar_detections`' actual analytical scope in this file is narrower
+  than its column list implies** (`docs/architecture/SCHEMA_REVIEW.md` finding F4,
+  new in the Stage 5A review): `range`, `range_rate`, `snr`,
+  `filter_type`, `estimated_width_meters`, and `is_marked` are all
+  CONFIRMED constant/empty across all 2,929 rows — only `azimuth_rad`,
+  `elevation_rad`, `track_id`, and `capture_time_ns` carry real signal in
+  this file.
+- `capture_time_ns` population on `cv_detections` (7,121/7,121),
+  `cv_tracks`/`cv_track_states` (35,613/35,613), and `radar_detections`
+  (2,902/2,902 messages) was upgraded from an ASSUMPTION to CONFIRMED
+  during the Stage 5A schema review (full-dataset checks) —
+  no longer an open risk. `return_strength` and the four `*_sigma`
+  columns on `radar_detections` remain unverified at full-dataset scale
+  and should be checked before ETL implementation relies on them.
 - All findings in this document describe one sanitized recording session.
   Whether the always-empty fields, the 100%-unique detection ids, or the
   zero-overlap track-id namespaces would hold for a different file was
-  not and cannot be tested here.
+  not and cannot be tested here (`docs/architecture/SCHEMA_REVIEW.md` finding F8).
+### 5.4a `cv_track_class_distribution`
+
+- **Grain:** one row per `CVTrack.class_distribution[]` entry for one `cv_track_states` row.
+- **Row count:** 37,984: exactly four source entries for each of 9,496 states.
+- **PK:** deterministic surrogate `cv_track_class_distribution_id`.
+- **FK:** `cv_track_state_id` → `cv_track_states.cv_track_state_id`.
+- **UNIQUE:** `(cv_track_state_id, source_order)` preserves one entry at each original zero-based position.
+- **Columns:** `class_raw`, descriptor-resolved `class_name`, exact decoded float `probability_score`, and `source_order`.
+- Duplicate classifications are valid and retained. No probability `CHECK` is imposed because the protobuf descriptor contains no explicit validation constraint.
+- This corrects source fidelity only; it does not replace the primary-class columns or alter checksum logic.

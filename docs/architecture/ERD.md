@@ -1,11 +1,16 @@
 # Entity-Relationship Diagram
 
-Stage 4 deliverable. Companion diagram to `docs/DATABASE_DESIGN.md` (full
-specification) and `docs/TABLE_GRAIN.md` (grain reference). Table names,
-primary keys, and foreign keys below are copied exactly from
-`docs/DATABASE_DESIGN.md` Section 5 — see that document for full column
-lists, nullability, indexes, and the reasoning behind every relationship
-(including the ones deliberately **not** drawn here).
+Stage 4 deliverable, updated in Stage 5A (`docs/architecture/SCHEMA_REVIEW.md`): two
+columns added (`cv_track_states.object_class_confidence`,
+`fused_track_states.object_class_confidence`), two radar columns renamed
+(`azimuth`→`azimuth_rad`, `elevation`→`elevation_rad`) for unit clarity.
+No table, primary key, foreign key, or relationship line changed. Companion
+diagram to `docs/architecture/DATABASE_DESIGN.md` (full specification) and
+`docs/architecture/TABLE_GRAIN.md` (grain reference). Table names, primary keys, and
+foreign keys below are copied exactly from `docs/architecture/DATABASE_DESIGN.md`
+Section 5 — see that document for full column lists, nullability,
+indexes, and the reasoning behind every relationship (including the ones
+deliberately **not** drawn here).
 
 ```mermaid
 erDiagram
@@ -34,9 +39,18 @@ erDiagram
         INTEGER cv_track_state_id PK
         INTEGER source_message_id FK
         INTEGER track_id FK
-        INTEGER last_associated_detection_id "raw provenance, not FK"
+        INTEGER last_associated_detection_id "raw provenance, NOT FK - see note"
         INTEGER num_detection_associations
+        REAL object_class_confidence "added Stage 5A, F5"
         INTEGER parent_object_track_id "unenforced self-ref"
+    }
+    cv_track_class_distribution {
+        INTEGER cv_track_class_distribution_id PK
+        INTEGER cv_track_state_id FK
+        INTEGER class_raw
+        TEXT class_name
+        REAL probability_score
+        INTEGER source_order
     }
 
     cv_detection_track_links {
@@ -48,6 +62,8 @@ erDiagram
     radar_detections {
         INTEGER radar_detection_id PK
         INTEGER source_message_id FK
+        REAL azimuth_rad "renamed Stage 5A, F4 - confirmed radians"
+        REAL elevation_rad "renamed Stage 5A, F4 - confirmed radians"
         TEXT track_id "not FK - rejected namespace, Stage 3"
         TEXT cluster_json "not a self-FK - no id field exists"
     }
@@ -63,6 +79,7 @@ erDiagram
         TEXT fused_track_id FK
         INTEGER log_time_ns
         INTEGER object_class_raw "no DRONE/AIRPLANE value exists"
+        REAL object_class_confidence "added Stage 5A, F5"
     }
 
     fused_track_measurements {
@@ -85,6 +102,7 @@ erDiagram
     source_messages ||--o{ fused_track_states : "one message, one state (1:1 in practice)"
 
     cv_tracks ||--o{ cv_track_states : "one track, many restatements"
+    cv_track_states ||--|{ cv_track_class_distribution : "one state, ordered class candidates"
     cv_tracks ||--o{ cv_detection_track_links : "one track, many linked detections"
     cv_detections ||--o{ cv_detection_track_links : "one detection, at most one link (Section below)"
 
@@ -106,7 +124,19 @@ erDiagram
   This is deliberate: its `related_table`/`related_id` columns are a
   loose, polymorphic reference (they can point to rows in *different*
   tables depending on `issue_type`) and are intentionally not a real
-  foreign key — see `docs/DATABASE_DESIGN.md` Section 5.10.
+  foreign key — see `docs/architecture/DATABASE_DESIGN.md` Section 5.10.
+- `cv_track_states.last_associated_detection_id` has **no relationship
+  line** to `cv_detections`, deliberately (`docs/architecture/SCHEMA_REVIEW.md`
+  finding F1) — only the deduplicated `cv_detection_track_links` bridge
+  table enforces that relationship, after filtering the 4 confirmed
+  orphaned values; enforcing it on this raw column too would reject 4
+  otherwise-valid rows.
+- The `cv_tracks ||--o{ cv_track_states` and `fused_tracks ||--o{
+  fused_track_states` lines both carry a loading-order implication not
+  visible in the diagram itself: both parent tables must be **fully**
+  populated by an upfront scan before any child row referencing them is
+  inserted — see `docs/architecture/DATABASE_DESIGN.md` Section 5.12
+  (`docs/architecture/SCHEMA_REVIEW.md` finding F2).
 
 ## Cardinalities, stated precisely
 
@@ -130,12 +160,12 @@ detections maps to exactly one track — zero conflicts. The Mermaid diagram
 draws the general `||--o{` form because the schema does not forbid
 multiple links; it is not literally `||--o|` (one-to-zero-or-one), which
 would over-claim a constraint the data merely happens to satisfy so far.
-See `docs/DATABASE_DESIGN.md` Section 5.5.
+See `docs/architecture/DATABASE_DESIGN.md` Section 5.5.
 
 ## Relationships deliberately NOT drawn
 
 These candidate relationships were investigated in Stage 3 and/or Stage 4
-and explicitly **not** enforced — see `docs/DATABASE_DESIGN.md` Section 6
+and explicitly **not** enforced — see `docs/architecture/DATABASE_DESIGN.md` Section 6
 for the full evidence behind each:
 
 - `cv_track_states.parent_object_track_id` → `cv_tracks.track_id`

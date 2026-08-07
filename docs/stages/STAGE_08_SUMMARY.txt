@@ -1,0 +1,214 @@
+STAGE 8 SUMMARY — Streamlit Analytical Dashboard
+=======================================================================
+
+SCOPE
+-----
+Built a read-only Streamlit dashboard over the completed ETL pipeline,
+SQLite database, and 22-query analytical SQL library. No change to
+sql/schema.sql, sql/indexes.sql, sql/views.sql, sql/validation.sql, any
+src/cuas_etl/*.py module, or any file under queries/. The dashboard is
+strictly a presentation layer: every number, chart, and table comes
+from executing an existing .sql file read-only; nothing is recomputed
+or reimplemented in Python.
+
+FILES CREATED
+-------------
+dashboard/
+  __init__.py                (package marker -- see Deviations below)
+  app.py                       (entry point)
+  database.py                   (read-only connection, DB metadata, integrity checks)
+  sql_loader.py                   (query discovery + execution -> DataFrame)
+  query_catalog.py                  (presentation metadata: chart type, page placement)
+  charts.py                           (generic Plotly chart builders)
+  formatting.py                         (number/percentage/status formatting)
+  constants.py                            (paths, labels, color palette)
+  components/
+    __init__.py
+    metrics.py                              (KPI card row)
+    tables.py                                 (DataFrame table + CSV download)
+    status.py                                   (pass/fail/warning banners)
+    query_details.py                              (source-query expander)
+    sidebar.py                                      (shared sidebar -- see Deviations)
+  pages/
+    1_Executive_Dashboard.py
+    2_Operations_Dashboard.py
+    3_Technical_Dashboard.py
+    4_Query_Explorer.py
+
+tests/test_dashboard.py     (24 tests)
+docs/dashboard/DASHBOARD_GUIDE.md
+docs/stages/STAGE_08_SUMMARY.txt   (this file)
+
+FILES MODIFIED
+--------------
+  requirements.txt   (+streamlit==1.61.1, +pandas==3.0.5, +plotly==6.9.0)
+  pyproject.toml      (pythonpath = ["src", "."] -- so `dashboard.*` imports
+                        resolve under pytest the same way they do under
+                        `streamlit run`)
+  README.md            (dashboard overview added -- see below)
+
+Not modified: sql/*.sql, src/cuas_etl/*.py, queries/*.sql (all 22 files
+byte-for-byte unchanged), scripts/build_database.py,
+scripts/run_validation.py, scripts/run_analytics.py (imported by
+dashboard/sql_loader.py, never edited).
+
+DEVIATIONS FROM THE PROPOSED FILE LIST
+------------------------------------------
+Two small additions beyond the approved plan, both flagged here for
+visibility (also documented in docs/dashboard/DASHBOARD_GUIDE.md):
+  1. dashboard/__init__.py and dashboard/components/__init__.py --
+     required for `dashboard.*` to resolve as a proper Python package.
+  2. dashboard/components/sidebar.py -- Streamlit's multipage model
+     runs each pages/*.py file as an independent script; the shared
+     sidebar (project overview, DB status, navigation) needed a home
+     every page could import without re-triggering app.py's own
+     st.set_page_config(). Contains only structural DB metadata
+     display, no analytical logic.
+
+PAGES CREATED
+-------------
+1. Executive Dashboard -- KPI row (9 metrics), CV detection-to-track
+   funnel, sensor utilization, Drone/Airplane duration comparison (the
+   protected checksum result, arithmetic mean primary + documented
+   caveat), multi-sensor vs. single-sensor comparison, duration by
+   exact sensor combination, data-quality issue summary, Key Findings.
+2. Operations Dashboard -- CV/fused track selectors (the only 2 real
+   parameterized filters in the query library), longest-lived tracks,
+   CV track history, fused track history, sensor contributions per
+   fused track, classification changes over time, CV focus quality vs.
+   incorporation, CV detection quality vs. track persistence,
+   classification stability vs. measurement support. Explicit callout
+   that CV and fused tracks are never joined by ID.
+3. Technical Dashboard -- database metadata, live integrity/FK checks,
+   optional "Run validation" button (subprocess to the unchanged
+   scripts/run_validation.py), all 6 technical queries with status
+   banners.
+4. Query Explorer -- browse/filter/run/download any of the 22 approved
+   queries; only executes files already on disk, never accepts
+   arbitrary SQL or a filesystem path.
+
+QUERIES REUSED
+--------------
+All 22 existing queries (21 from Stage 7/7B + the preserved legacy
+queries/fused_track_duration_by_type.sql) are wired into the dashboard.
+Zero new .sql files were created. Per explicit approval, 3 KPIs reuse
+already-computed rows from existing queries rather than requiring new
+single-purpose SQL:
+  - "Total Fused Tracks" and "Total Radar Detections" (Executive page)
+    select the matching row out of
+    queries/technical/table_row_count_reconciliation.sql's existing
+    output.
+  - "Data-Quality Issues" total (Executive page) sums the issue_count
+    column already returned by
+    queries/executive/data_quality_issue_summary.sql.
+This is presentational aggregation of an already-fully-computed SQL
+result (picking/summing rows a query already produced), not a
+re-derivation of business logic in Python.
+
+NEW QUERIES ADDED
+------------------
+None. Per instruction, no new SQL was created solely to support
+dashboard KPIs.
+
+CHARTS CREATED
+---------------
+6 generic, query-agnostic Plotly builders in dashboard/charts.py:
+bar_chart, comparison_bar_chart (with optional min/max error bars),
+funnel_chart, scatter_chart, line_chart -- each takes a DataFrame and
+column names only, never a query name, keeping all analytical content
+in SQL.
+
+TESTS ADDED
+-----------
+tests/test_dashboard.py -- 24 tests covering all 15 requested
+categories: read-only connection enforcement (including a database-
+not-found error path), query discovery (all 22 files, including the
+preserved legacy one), a static check that no dashboard module embeds
+analytical SQL (with two narrow, explicitly-justified exceptions for
+non-analytical lookups and pure catalog introspection, each separately
+verified), executive/operational/technical query execution, invalid-
+query and missing/unexpected-parameter rejection, a full before/after
+whole-database content diff proving no dashboard action mutates
+sentry.db, a row-count fingerprint check, per-query expected-column
+verification, core module import checks, 5 Streamlit AppTest page-
+rendering smoke tests (app.py + all 4 pages), and a CSV-export
+round-trip test. No existing Stage 6/6B/7/7B test file was modified.
+
+FINAL TEST COUNT
+-----------------
+251 passed (227 prior + 24 new). 0 failed.
+
+DASHBOARD LAUNCH COMMAND
+--------------------------
+    streamlit run dashboard/app.py
+
+LIMITATIONS
+-----------
+- Only 2 real parameterized filters exist (:track_id, :fused_track_id)
+  -- no result-limit, min-duration, object-class, focus-quality, or
+  sensor-type filter is offered, since none is backed by a
+  parameterized query (per explicit instruction not to add filters
+  that can't be applied safely through parameterized SQL).
+- The Query Explorer and Operations page selectors are populated by 2
+  tiny, non-analytical identity-list lookups defined directly in
+  sql_loader.py (not a queries/*.sql file) -- documented and tested as
+  a narrow, approved exception.
+- Streamlit AppTest exercises each page's server-side logic and
+  confirms no exception is raised, but does not replace a human
+  visually reviewing the running app in a browser (see screenshot
+  instructions below).
+- The development machine's disk was critically low on space
+  (encountered "No space left on device" mid-install) -- resolved by
+  purging the pip cache (a safe, standard, fully reversible cleanup),
+  but disk usage remains a systemic, machine-level concern outside
+  this project's scope; flagging for awareness, not attempting further
+  cleanup without explicit direction.
+
+CONFIRMATIONS
+-------------
+- No ETL file changed: src/cuas_etl/{extract,transform,load,validation,database}.py
+  are byte-for-byte unchanged from before this stage.
+- No schema file changed: sql/{schema,indexes,views,validation}.sql are
+  byte-for-byte unchanged.
+- SQLite remained read-only throughout: every dashboard connection uses
+  mode=ro + PRAGMA query_only=ON; a direct write attempt through it
+  raises sqlite3.OperationalError (verified by test); a full table-
+  content diff before/after running all 22 queries shows zero change.
+
+VALIDATION RESULTS (this session, after full dashboard implementation)
+---------------------------------------------------------------------------
+Rebuild command:       python scripts/build_database.py --rebuild  -> PASSED
+Validation:             python scripts/run_validation.py            -> Overall: PASSED
+Analytics runner:        python scripts/run_analytics.py --all       -> exit 0, all 22 queries ran
+Full pytest suite:        251 passed, 0 failed
+PRAGMA integrity_check:    ok
+PRAGMA foreign_key_check:   no violations
+Source MCAP MD5:             e32b641c93b84861d855b01a79ea09d0 (unchanged
+                              before and after every step above)
+All 5 dashboard scripts (app.py + 4 pages) render without exception via
+streamlit.testing.v1.AppTest.
+
+REMAINING WORK
+---------------
+Docker (explicitly deferred to a future stage, not started here).
+Screenshots of the running app (instructions provided separately --
+requires a human to launch `streamlit run dashboard/app.py` and
+capture the browser; not something this session can produce, per
+instruction not to fabricate screenshots).
+
+SUGGESTED GIT COMMIT MESSAGE
+--------------------------------
+Add Stage 8 Streamlit analytical dashboard (read-only presentation layer)
+
+- Add dashboard/ (app.py, 4 pages, sql_loader/query_catalog/charts/
+  formatting/database/constants modules, components/ package) wired
+  entirely to the existing 22-query analytical SQL library -- no new
+  analytical SQL, no ETL/schema changes
+- Add tests/test_dashboard.py (24 tests: read-only enforcement, query
+  discovery, execution, parameter validation, no-database-mutation
+  diff, AppTest page smoke tests, CSV export)
+- Add docs/dashboard/DASHBOARD_GUIDE.md, docs/stages/STAGE_08_SUMMARY.txt
+- Update requirements.txt (streamlit, pandas, plotly) and
+  pyproject.toml (pythonpath) for the new dependency
+- Full suite: 251/251 passing; PRAGMA integrity_check ok; PRAGMA
+  foreign_key_check clean; source MCAP checksum unchanged

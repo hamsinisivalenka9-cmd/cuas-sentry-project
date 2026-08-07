@@ -8,3 +8,10 @@ protobuf==7.35.1
 Pygments==2.20.0
 pytest==9.1.1
 zstandard==0.25.0
+
+# Stage 8: Streamlit analytical dashboard (presentation layer only --
+# all analytical logic remains in sql/ and queries/, never duplicated
+# here). See docs/dashboard/DASHBOARD_GUIDE.md.
+pandas==3.0.5
+plotly==6.9.0
+streamlit==1.61.1

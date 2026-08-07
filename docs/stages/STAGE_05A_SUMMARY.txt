@@ -1,0 +1,759 @@
+=========================================================
+PROJECT CHECKPOINT
+=========================================================
+
+Stage Number:   5A
+Stage Name:     Skeptical Schema Review (pre-implementation)
+Objective:      Before writing schema.sql or any database code, put the
+                Stage 4 relational design through an adversarial,
+                evidence-based review -- checking for unique-key
+                problems, loading-order failures, hidden many-to-many
+                relationships, unverified assumptions, and anything else
+                that looks fine on paper but would misbehave the moment
+                real data was loaded through it -- and correct only what
+                the evidence actually justifies.
+Status:         Complete (review + documentation only; schema.sql and
+                the database remain Stage 5B/6 work)
+Generated:      2026-08-06
+
+This summary was generated retrospectively from verified project artifacts.
+
+SOURCES USED: docs/architecture/DATABASE_DESIGN.md, docs/architecture/TABLE_GRAIN.md,
+docs/architecture/NORMALIZATION_DECISIONS.md, docs/architecture/ERD.md (the design under review),
+docs/data/MCAP_INSPECTION.md, docs/data/KEY_ANALYSIS.md,
+data/output/mcap_schema_report.json, data/output/key_analysis.json,
+CLAUDE.md, AGENTS.md, and a further round of read-only, full-dataset
+queries run directly against data/input/sanitized.mcap during this stage,
+specifically to answer questions the existing evidence did not already
+settle. This stage's own output, docs/architecture/SCHEMA_REVIEW.md, is the primary
+source for this summary's findings; this document summarizes it rather
+than repeating its full detail.
+
+=========================================================
+WHY THIS STAGE EXISTS
+=========================================================
+
+Stage 4 produced a complete, documented database design -- but a design
+document reviewing itself is a weak check. The author of a design is the
+person least likely to notice their own blind spots, because every
+assumption already feels justified to the person who made it. This stage
+exists to apply a different kind of scrutiny: read the design the way
+someone who did not write it, and does not trust it, would -- looking
+specifically for the failure modes that a design can have even when every
+individual sentence in it sounds reasonable. A specific, twenty-five-item
+checklist was used (unique keys, foreign keys to non-unique columns,
+loading-order cycles, hidden many-to-many relationships, unit ambiguity,
+timestamp precision, and more) precisely so the review could not quietly
+narrow itself to only the areas the reviewer already felt confident about.
+
+This could not safely be skipped because a database schema is one of the
+most expensive things to fix after real data has been loaded through it.
+A foreign-key ordering problem, a units mismatch, or a silently-wrong
+assumption about which field is safe to treat as unique are all the kind
+of defect that either blocks the very first load attempt or, worse,
+loads successfully and produces subtly wrong answers that are not
+noticed until much later. Catching these now, against documentation, costs
+a careful re-read. Catching them after schema.sql exists and data is
+loaded costs a migration.
+
+=========================================================
+WHAT WE ACCOMPLISHED
+=========================================================
+
+1. Re-read all four Stage 4 documents against the full checklist, table
+   by table and decision by decision.
+   What was done: every one of the 10 tables and all 14 explicitly-named
+   key/constraint decisions from Stage 4 were individually re-examined,
+   not just skimmed for obvious problems.
+   Why: a checklist-driven pass catches categories of problem a free-form
+   re-read tends to miss, because it forces the reviewer to actively look
+   for things that are absent (a missing index, an unstated assumption)
+   rather than only reacting to things that are visibly present.
+   What was learned: the review surfaced several real gaps in the
+   original design before any new data was even queried -- most notably,
+   that the design never explicitly stated the two-phase loading order
+   its own foreign keys require, and that one column
+   (`last_associated_detection_id`) relied on an implicit, easy-to-miss
+   "this is not enforced" fact.
+
+2. Gathered new, full-dataset evidence for questions the existing
+   Stage 2/3/4 evidence did not settle, rather than reasoning from memory
+   or assumption.
+   What was done: eight distinct new read-only queries were run directly
+   against the real 57,266-message file: every field on the `CVTrack`
+   message's `class_distribution` structure; `track_states`'
+   `object_class_confidence` and `object_class_external` fields; whether
+   a persistent fused track's classification actually changes across its
+   own history; radar `azimuth`/`elevation`/`range`/`range_rate`/`snr`
+   value ranges and population; `capture_time` population on the two CV
+   topics; `track_status` population on `track_states`; and a plain
+   arithmetic check that nanosecond timestamps fit safely in a signed
+   64-bit integer.
+   Why: several existing "ASSUMPTION"-tagged claims in the Stage 4 design
+   were assumptions specifically because they had not yet been checked
+   at full scale -- a genuine review has to actually check them, not
+   just note that they are unchecked.
+   What was learned: this is where the review's most substantial findings
+   came from -- see "What We Discovered" below.
+
+3. Categorized every finding as exactly one of five types (confirmed
+   defect, design improvement, documentation ambiguity, performance
+   optimization, or unresolved question) and wrote up nine findings in
+   full in docs/architecture/SCHEMA_REVIEW.md, each with severity, the affected table,
+   the exact evidence, a proposed correction, and its effect on ETL, SQL
+   simplicity, and maintainability.
+   Why: distinguishing these categories explicitly (rather than calling
+   everything either "a bug" or "fine") keeps a review honest about how
+   much it actually found wrong versus how much it is refining or simply
+   confirming with better evidence.
+   What was learned: of the nine findings, one was a genuine defect in
+   the documentation's completeness (the loading-order gap), several were
+   design improvements backed by fresh evidence (two new columns), a few
+   were documentation-clarity fixes with no structural change, two were
+   minor index redundancies, and several were explicit confirmations that
+   a checked area had no problem at all -- a realistic distribution for a
+   design that had already been through one round of compaction and
+   correction in Stage 4.
+
+4. Applied every justified correction directly to the four Stage 4
+   documents, and updated docs/stages/STAGE_04_SUMMARY.txt with a summary
+   addendum, without reversing any of the 10 tables or 14 named key
+   decisions.
+   What was done: targeted edits, not rewrites -- new columns added where
+   evidence supported them, two columns renamed for unit clarity, two
+   redundant indexes removed, several ASSUMPTION tags upgraded to
+   CONFIRMED (or left as ASSUMPTION where still unverified), and a new
+   subsection (Section 5.12) added describing the concrete two-phase
+   loading strategy.
+   Why: the goal of a review is to leave the design more trustworthy, not
+   to demonstrate activity by rewriting things that were already correct.
+   What was learned: it is possible, and preferable, for a rigorous review
+   to conclude "the core architecture holds up" while still finding real,
+   worthwhile things to fix -- these are not in tension.
+
+=========================================================
+WHAT WE DISCOVERED
+=========================================================
+
+- The persistent fused-track identity tables (`cv_tracks`, `fused_tracks`)
+  are derived from the *distinct values* found inside their own child
+  tables' source data, not from a separate protobuf structure -- and nothing
+  in the original Stage 4 design explicitly stated that this means those
+  identity tables must be fully populated by a complete, upfront scan
+  before any dependent row is inserted, not discovered incrementally.
+  Why it matters: a natural, single-pass streaming implementation --
+  process each message and insert its rows as they're decoded -- would hit
+  a foreign-key failure on the very first message, because a track's
+  first-ever appearance in its own state-history table would be inserted
+  before that track's identity row exists. This is exactly the kind of
+  problem that is invisible on paper and only shows up the moment someone
+  tries to actually load data with foreign-key enforcement turned on.
+
+- `cv_track_states.last_associated_detection_id` was relying on an
+  implicit fact rather than an explicit one: the design already correctly
+  excluded 4 known-orphaned references from the derived bridge table, but
+  never explicitly said this same raw column must *also* stay
+  unenforced, for the same reason.
+  Why it matters: a column that looks exactly like a foreign key, sitting
+  right next to real foreign keys, is a natural thing for a future
+  engineer to "complete" by adding the constraint -- which would then
+  break loading for a reason that would have to be rediscovered from
+  scratch, at implementation time, instead of being flagged here.
+
+- A field that was never checked before being designed around --
+  `cv_tracks.tracks[].class_distribution`, a repeated, per-candidate-class
+  probability structure -- turned out to be fully populated (all 9,496
+  track rows carry exactly 4 candidate classifications each). Its
+  candidates, however, are only "bird," "air vehicle," and "unknown" --
+  never "drone" or "airplane," even as a low-probability alternative.
+  Why it matters: this is exactly the kind of investigation a real review
+  has to perform rather than skip -- an unchecked omission next to an
+  already-flagged, high-stakes open question (the project's Drone/Airplane
+  target) is precisely where a review needs to look hardest. In this
+  case, the check reinforced the original conclusion rather than
+  overturning it, which is itself a useful, evidence-backed outcome, not
+  a wasted check.
+
+- A second, previously-unexamined field, `track_states.object_class_
+  confidence`, was found fully populated across all 11,630 fused-track
+  state rows (with real, varying values, not a constant) -- and had not
+  been included as a column in the original Stage 4 design at all.
+  Why it matters: a real, populated confidence score sitting directly
+  next to a classification the project has already flagged as ambiguous
+  is exactly the kind of evidence an analyst investigating that ambiguity
+  would want available -- omitting it without ever checking whether it
+  existed was a genuine gap, now closed.
+
+- Persistent fused tracks do not always keep one classification for their
+  entire lifetime: 18 of the 103 persistent fused tracks (about 1 in 6)
+  show more than one distinct classification value across their own
+  history. Looking at the actual sequences shows two different real
+  patterns -- some are a single-frame blip surrounded by an otherwise
+  stable classification, and others are a clean, sustained switch from
+  one classification to another partway through the track's life.
+  Why it matters: this means "the classification of a fused track" is not
+  a simple, given fact the way "the classification of a single detection"
+  is -- it has to be resolved by an explicit rule, and different
+  reasonable rules (first seen, last seen, most common, highest
+  confidence, or not resolving to one value at all) would give different
+  answers for these 18 tracks. The original Stage 4 design's description
+  of the "duration by class" analytical question as a simple one-view,
+  one-`GROUP BY` query did not account for this at all.
+
+- Once several radar fields were checked at full scale rather than left
+  unverified, `radar_detections` turned out to have far less usable
+  signal than its column list implied: `range`, `range_rate`, `snr`,
+  `filter_type`, `estimated_width_meters`, and `is_marked` are all
+  confirmed constant or empty across every one of the 2,929 radar
+  detections in this file. By contrast, `azimuth` and `elevation` are
+  genuinely populated, and their actual observed value ranges (matching
+  zero to two-pi) gave enough evidence to confirm they are recorded in
+  radians, not degrees -- a unit that was never stated in the original
+  design at all.
+  Why it matters: an unlabeled angle column is a real, specific risk for
+  a future analyst to silently compute wrong geometry with; and knowing
+  in advance that most of this table's columns carry no real signal in
+  this particular file sets honest expectations for what "radar
+  analysis" can actually show, rather than an implicit promise the
+  column list did not actually back up.
+
+- Nanosecond-precision timestamps, stored as SQLite's `INTEGER` type,
+  were confirmed -- by direct arithmetic, not assumption -- to have
+  roughly 5.2 times the headroom before any 64-bit overflow risk, given
+  the actual timestamp values observed in this file.
+  Why it matters: this had already been designed correctly in Stage 4,
+  but had never been explicitly checked and stated as checked -- this
+  review turned an implicit, reasonable assumption into an explicit,
+  confirmed fact, which is a small but real improvement in how much a
+  future reader can trust the design without re-deriving it themselves.
+
+=========================================================
+ENGINEERING DECISIONS
+=========================================================
+
+Decision: Recommend a concrete two-phase loading strategy (envelope and
+identity tables fully populated first; everything else second) rather
+than recommending any relaxation of foreign-key enforcement.
+Reason: explicit instruction, and good practice independent of the
+instruction -- CLAUDE.md rule 8 requires foreign-key enforcement to
+actually be active, and a solution that works around that requirement
+defeats the purpose of having it.
+Alternative considered: recommend `PRAGMA defer_foreign_keys = ON`
+(a SQLite feature that delays constraint checking until the end of a
+transaction) as the primary fix, allowing a simpler single-pass streaming
+load.
+Why the chosen approach is better: the two-phase strategy is simpler to
+reason about and test -- it is a plain, sequential algorithm with no
+transaction-scoped subtlety to get wrong. The deferred-constraint
+technique was still noted as a valid alternative for an implementer who
+strongly prefers single-pass streaming, but was deliberately not made the
+primary recommendation.
+Future impact: Stage 5B/6's ETL implementation now has an unambiguous,
+tested-on-paper loading algorithm to follow, and does not need to
+rediscover the two-phase requirement by hitting a foreign-key failure
+during development.
+
+Decision: Investigate `class_distribution` and `object_class_confidence`
+with real, full-dataset queries before deciding whether they change the
+schema, rather than reasoning about them in the abstract.
+Reason: explicit instruction, and the only way to actually answer "should
+this have been included" honestly -- a decision made without checking
+population would just be a different unverified assumption replacing the
+first one.
+Alternative considered: leave both fields as previously omitted /
+unexamined, on the reasoning that the compact-design goal already argued
+against adding more columns.
+Why the chosen approach is better: the investigation found a real,
+populated, directly relevant field (`object_class_confidence`) that had
+simply never been looked at -- an outcome that could not have been
+predicted without actually checking, and that a "no new columns" policy
+applied without checking would have missed permanently.
+Future impact: the classification-semantics comparison (see below) is now
+grounded in a real confidence signal instead of a hypothetical one, and
+the schema carries the evidence needed to support whichever resolution
+rule is eventually chosen.
+
+Decision: Define and compare five possible classification-resolution
+semantics for "the" class of a fused track, without selecting one.
+Reason: explicit instruction not to choose a semantic unless the source
+evidence or the assignment's own wording justifies one -- and neither
+does. The five options are each defensible under different reasonable
+interpretations of "the" class of a track, and the real evidence (18 of
+103 tracks showing genuine within-track changes) shows the choice
+actually matters, rather than being an academic distinction.
+Alternative considered: pick the semantic that seems most standard for
+tracking systems (for example, "most frequent class") and document it as
+the recommended default.
+Why the chosen approach is better: picking one, even as a "default,"
+would have been exactly the kind of invented business rule the project
+has consistently avoided at every prior stage when the data did not
+justify a specific choice -- and doing so here would risk quietly
+resolving part of the still-open Drone/Airplane question by fiat instead
+of leaving it genuinely open for a human decision.
+Future impact: whoever answers CLAUDE.md's duration-by-class question
+later has real trade-offs and real evidence in front of them, not a
+blank page and not a silently-already-decided answer.
+
+Decision: Remove two indexes identified as redundant with existing
+UNIQUE constraints, rather than leaving them for "extra safety."
+Reason: SQLite automatically creates an index to enforce a UNIQUE
+constraint, and by the standard leftmost-prefix rule for multi-column
+indexes, that automatic index already serves any query filtering on just
+the first column of the constraint -- a separately declared single-column
+index on that same first column adds no additional query capability.
+Alternative considered: leave both indexes in place, reasoning that extra
+indexes are harmless.
+Why the chosen approach is better: they are not entirely harmless -- they
+cost extra maintenance during every insert and extra storage, for zero
+benefit, and leaving them in place would misrepresent the design as
+having made a deliberate indexing choice there when it had actually just
+duplicated an existing one.
+Future impact: two fewer indexes for the Stage 5B/6 implementation to
+create and keep in sync with the constraint list.
+
+=========================================================
+FOLLOW-UP PROMPTS AND COURSE CORRECTIONS
+=========================================================
+
+1. "Proceed. Keep every finding evidence-based and distinguish clearly
+   between: confirmed defect, design improvement, documentation
+   ambiguity, performance optimization, and unresolved question."
+   What prompted it: the initial review plan was approved, but the user
+   wanted an explicit taxonomy applied to every finding rather than a
+   single undifferentiated list of "issues."
+   What problem it fixed: without this distinction, a reader cannot tell
+   the difference between "this will break" and "this could be slightly
+   better" and "this is fine but wasn't explained clearly enough" -- three
+   very different levels of urgency that a flat list would blur together.
+   How it improved the project: every one of the nine findings in
+   docs/architecture/SCHEMA_REVIEW.md is now explicitly labeled with one of the five
+   categories, making the review's actual severity distribution visible
+   at a glance rather than requiring a full read to assess.
+   What changed: shaped the structure of docs/architecture/SCHEMA_REVIEW.md from its
+   first draft.
+
+2. "For the loading-order review, recommend one concrete implementation
+   strategy... Do not recommend disabling foreign-key enforcement as the
+   normal solution."
+   What prompted it: a specific concern that a loading-order review could
+   easily end in a vague "be careful about ordering" observation, or
+   worse, a lazy "just turn off enforcement while loading" shortcut.
+   What problem it fixed: forced the review to actually design and test
+   (conceptually, table by table) a working strategy, rather than just
+   naming the problem.
+   How it improved the project: produced the concrete two-phase strategy
+   in docs/architecture/SCHEMA_REVIEW.md Section 3, tested step-by-step against all 10
+   tables under `PRAGMA foreign_keys = ON`, with the deferred-constraint
+   technique explicitly demoted to "valid alternative," not the answer.
+   What changed: docs/architecture/DATABASE_DESIGN.md Section 5.12 (new).
+
+3. "For the class-distribution and object_class_external investigation,
+   report their actual population counts and observed values before
+   deciding whether they should remain omitted, flattened, stored as
+   JSON, or normalized."
+   What prompted it: recognizing that the original Stage 4 design had
+   made an omission decision about these fields without ever measuring
+   them -- an assumption dressed up as a decision.
+   What problem it fixed: replaced that unmeasured decision with a
+   measured one, in both directions -- `object_class_external` was
+   confirmed correctly omitted (still empty), while
+   `class_distribution`/`object_class_confidence` were found to justify a
+   real, if modest, schema addition.
+   How it improved the project: the schema now includes a genuinely
+   useful, evidence-backed confidence column that did not exist before
+   this review.
+   What changed: docs/architecture/DATABASE_DESIGN.md (two new columns),
+   docs/architecture/NORMALIZATION_DECISIONS.md (three new inventory rows).
+
+4. "For fused-track duration by class, explicitly define and compare
+   possible classification semantics... Do not choose one unless the
+   source evidence or assignment semantics justify it."
+   What prompted it: the same discipline applied throughout this project
+   -- do not resolve a genuinely open question just because a schema
+   document would look tidier with a single answer in it.
+   What problem it fixed: prevented the review from quietly picking a
+   "reasonable default" classification rule that would have functioned as
+   an unstated, undiscussed business decision.
+   How it improved the project: produced a real, evidence-grounded
+   comparison table (five semantics, their strengths and weaknesses,
+   using this file's actual conflicting-classification tracks as concrete
+   examples) that a future decision-maker can use directly.
+   What changed: docs/architecture/SCHEMA_REVIEW.md Section 4 (new); the corrected
+   Section 9 query #2 in docs/architecture/DATABASE_DESIGN.md points to it.
+
+=========================================================
+FILES CREATED
+=========================================================
+
+docs/architecture/SCHEMA_REVIEW.md
+  Purpose: the complete skeptical review -- methodology, nine findings
+  (each with severity, category, affected table, evidence, correction,
+  and ETL/SQL/maintainability impact), the explicit 10-table and
+  14-decision re-checks, the loading-order test, and the classification-
+  semantics comparison.
+  Inputs: the four Stage 4 documents, Stage 2/3 evidence, CLAUDE.md/
+  AGENTS.md, and new full-dataset queries run during this stage.
+  Outputs: none (this is itself the output).
+  Generated or handwritten: handwritten, incorporating programmatically-
+  verified facts.
+  Should it be committed to git: yes -- review documentation, not raw
+  source data or a generated database.
+  Will it be reused later: yes -- the direct evidence trail for every
+  correction applied to the design documents; a reference for anyone
+  asking "why does this column exist" or "why isn't this enforced."
+
+docs/stages/STAGE_05A_SUMMARY.txt
+  Purpose: this document -- the Stage 5A engineering journal entry, in
+  the same format used for Stages 1-4.
+  Inputs: docs/architecture/SCHEMA_REVIEW.md, the four revised Stage 4 documents,
+  docs/stages/STAGE_04_SUMMARY.txt.
+  Outputs: none.
+  Generated or handwritten: handwritten.
+  Should it be committed to git: yes.
+  Will it be reused later: yes, as part of a future project timeline
+  document if one is extended to cover this stage.
+
+=========================================================
+FILES MODIFIED
+=========================================================
+
+docs/architecture/DATABASE_DESIGN.md
+  What changed: two new columns
+  (`cv_track_states.object_class_confidence`,
+  `fused_track_states.object_class_confidence`); two radar columns
+  renamed for unit clarity (`azimuth`->`azimuth_rad`,
+  `elevation`->`elevation_rad`); explicit CONFIRMED-empty annotations
+  added to several radar columns; two redundant indexes removed and two
+  new ones added; a new Section 5.12 describing the two-phase loading
+  strategy; Section 9's query #2 description corrected to reflect the
+  real complexity of classification resolution; Section 11's unresolved-
+  risks list updated; several ASSUMPTION tags upgraded to CONFIRMED; a
+  pre-existing typo in the document title fixed.
+  No table, primary key, foreign key, UNIQUE constraint, or grain
+  statement was reversed.
+
+docs/architecture/TABLE_GRAIN.md
+  What changed: brief pointer notes added for the loading-order
+  requirement (`cv_tracks`, `fused_tracks`) and the radar scope finding;
+  no grain or row-count statement changed.
+
+docs/architecture/NORMALIZATION_DECISIONS.md
+  What changed: three new inventory rows
+  (`class_distribution`/`object_class_confidence`/`object_class_external`)
+  and two new rows for the radar unit/population corrections; no
+  structure's fate (own table / flattened / JSON / omitted) was reversed.
+
+docs/architecture/ERD.md
+  What changed: the two new columns and two renamed radar columns added
+  to the Mermaid diagram; two new explanatory notes added to "Reading
+  this diagram"; no table, key, or relationship line changed.
+
+docs/stages/STAGE_04_SUMMARY.txt
+  What changed: a new "STAGE 5A SCHEMA REVIEW (ADDENDUM)" subsection
+  added before the original PROJECT STATE section, summarizing this
+  stage's issues found, corrections made, decisions retained, and
+  remaining risks; the checkpoint header's Status/Generated fields
+  updated to note the review. The document's original PROJECT STATE
+  section (describing Stage 4's own file list) was left as an accurate
+  historical record and not rewritten.
+
+=========================================================
+VALIDATION
+=========================================================
+
+- Every new population/value-range claim in this stage's findings was
+  checked with a fresh, full-dataset, read-only query against the real
+  57,266-message file, the same discipline used in every prior stage --
+  not estimated, not remembered from an earlier session, and not assumed
+  by analogy to a similar field.
+
+- Where a claim in the original Stage 4 design could not be independently
+  re-verified in this review (for example, `radar_detections.return_
+  strength` and its `*_sigma` sibling columns), it was left explicitly
+  marked as still unverified rather than silently upgraded to CONFIRMED --
+  the review did not manufacture certainty it did not actually establish.
+
+- A cross-document consistency check was run after every correction was
+  applied, specifically checking that table names, grains, primary keys,
+  foreign keys, UNIQUE constraints, row-count figures, loading order, and
+  the unresolved-risk list all agree across docs/architecture/DATABASE_DESIGN.md,
+  docs/architecture/TABLE_GRAIN.md, docs/architecture/NORMALIZATION_DECISIONS.md, docs/architecture/ERD.md, and
+  docs/architecture/SCHEMA_REVIEW.md -- the same kind of check performed after Stage 4,
+  now re-run after this stage's edits to make sure the corrections did
+  not introduce a new inconsistency while fixing the original ones.
+
+- The source file's read-only status was preserved throughout -- every
+  investigative query in this stage opened data/input/sanitized.mcap in
+  binary read-only mode only.
+
+=========================================================
+WHAT WE INTENTIONALLY DID NOT DO
+=========================================================
+
+- Did not create schema.sql, a SQLite database, ETL/loader code, or any
+  view -- explicit instruction, and consistent with every prior stage's
+  discipline of documentation before implementation.
+
+- Did not resolve the CV-incorporation percentage discrepancy or the
+  Drone/Airplane classification question, even though this stage gathered
+  additional relevant evidence for both. Both remain documented as open,
+  unresolved questions requiring human or business-rule input.
+
+- Did not choose a classification-resolution semantic for "the" class of
+  a fused track, despite now having real evidence (the 18-track finding,
+  the confidence-score data) that could have supported picking one.
+
+- Did not reverse any of the 10 tables or 14 named key/constraint
+  decisions from Stage 4 -- every correction in this stage is additive or
+  clarifying, not structural.
+
+- Did not add columns, tables, or constraints beyond what a specific,
+  cited finding justified -- the two new columns
+  (`object_class_confidence` on two tables) are the only structural
+  additions in this entire review, both directly evidence-driven.
+
+These were postponed or avoided because this stage's job was specifically
+to review and correct the existing design against real evidence -- not to
+extend its scope, and not to resolve open questions the project has
+consistently and deliberately left open at every prior stage.
+
+=========================================================
+RISKS OR OPEN QUESTIONS
+=========================================================
+
+- The ~81% CV-incorporation target and the Drone/Airplane duration
+  question remain unresolved, now with additional, reinforcing evidence
+  rather than a path to resolution -- see docs/architecture/SCHEMA_REVIEW.md Section 5.
+
+- A new open question was surfaced by this stage: which of the five
+  compared classification-resolution semantics should be used for "the"
+  class of a persistent fused track. This is independent of the
+  Drone/Airplane blocker (it applies to any classification question about
+  fused tracks, not only that one) and needs a human decision informed by
+  docs/architecture/SCHEMA_REVIEW.md Section 4.
+
+- Several radar columns (`return_strength`, the four `*_sigma` columns)
+  remain unverified at full-dataset scale, carried forward as an
+  explicit open item for Stage 5B/6 rather than silently assumed reliable.
+
+- The two-phase loading strategy recommended in this review has been
+  tested conceptually, table by table, against the schema's foreign keys
+  -- it has not yet been tested against a real SQLite database, since no
+  database exists yet. That remains the first genuine test of whether the
+  strategy holds up in practice, deferred to Stage 5B/6 by design.
+
+=========================================================
+WHAT HAPPENS NEXT
+=========================================================
+
+Stage 5B/6 (not yet started) is where CLAUDE.md's instructions call for
+the actual schema.sql, the ETL pipeline, and the populated
+data/output/sentry.db to be built -- now following the Stage 4 design as
+corrected and clarified by this review, rather than the original,
+unreviewed version. We are ready for it because every structural element
+of the design survived skeptical review intact, every gap found was
+closed with either a correction or an explicit, evidence-backed caveat,
+and the one genuine implementation risk this review found (the loading-
+order requirement) now has a concrete, tested-on-paper strategy attached
+to it rather than being left for the implementer to discover the hard
+way. Expected inputs to Stage 5B/6: docs/architecture/SCHEMA_REVIEW.md and the four
+revised design documents, plus the source MCAP file and the two prior
+JSON reports. Expected outputs: schema.sql implementing the two-phase
+loading order explicitly, a working ETL pipeline, and a populated SQLite
+database with foreign-key enforcement active throughout. A known risk
+heading into that stage: the two new `object_class_confidence` columns
+require a small, specific extraction step (matching a `class_distribution`
+entry to a track's own `object_class`) that the ETL implementation must
+get right, not just a straight field copy.
+
+=========================================================
+INTERVIEW EXPLANATION
+=========================================================
+
+"After I finished the database design, I didn't treat it as done -- I
+went back through it the way someone trying to poke holes in it would,
+using a specific checklist so I couldn't just gravitate toward the parts
+I already felt good about. The most useful thing that checklist forced me
+to notice was a loading-order problem that would have been completely
+invisible on paper: two of my tables are built by scanning for distinct
+values inside other tables' own data, not from a separate source field.
+That's fine in theory, but it means a normal, single-pass way of loading
+the file -- read a message, insert its rows -- would try to insert a
+child row referencing an identity that doesn't exist in the parent table
+yet, and fail immediately with foreign keys turned on. That's exactly the
+kind of thing that looks correct in a design document and then blows up
+the first time someone actually tries to load data through it, so I
+worked out a concrete two-phase loading order that avoids it without
+weakening any constraint, and wrote it down explicitly instead of leaving
+it to be rediscovered later. The other thing I'm glad I did was go back
+and actually check two fields I'd previously decided not to include,
+instead of trusting my earlier reasoning. One of them, a per-track
+classification confidence score, turned out to be fully populated and
+directly relevant to a question the project already knew was unresolved
+-- I added it. The other confirmed that my original decision to leave a
+field out was actually correct, which is just as valuable an outcome,
+because now it's backed by evidence instead of assumption. And when that
+same investigation showed that some tracks in the data genuinely change
+classification partway through their history, I made a point of not
+quietly picking a rule for how to handle that -- I laid out five
+reasonable ways to define 'the' classification of a track, with real
+examples from the data showing why they'd give different answers, and
+left the actual choice for a human decision, because inventing that rule
+myself would have been exactly the kind of unjustified assumption this
+whole project has been careful to avoid."
+
+=========================================================
+BEGINNER TAKEAWAYS
+=========================================================
+
+- A "foreign key" only works if the row it points to already exists in
+  the database at the moment the referencing row is inserted -- not
+  eventually, not "later in the same file." This project discovered that
+  two of its tables are built by extracting a list of unique values from
+  data that lives in a *different* table, which means those two tables
+  have to be completely finished before anything that points to them can
+  be loaded. This is a genuinely common trap in real-world data
+  engineering: it is easy to design a correct-looking set of tables and
+  relationships and only discover the loading-order problem once you
+  actually try to load data through them in the "obvious" order.
+
+- Reviewing your own work is real, valuable engineering work -- it is not
+  a formality to get through before the "real" work of writing code
+  begins. This stage did not write a single line of implementation code,
+  and still found a problem (the loading order) that would have caused a
+  real failure, plus a genuinely useful improvement (the confidence
+  column) that would otherwise have simply never existed.
+
+- Checking an assumption and confirming it was already correct is not a
+  wasted step. Several things in this review turned out to already be
+  fine -- but "fine, and now I can prove it" is a meaningfully stronger
+  position than "fine, probably" for anyone who has to trust this design
+  later without re-deriving it themselves.
+
+- Real-world data is often messier than a single, tidy category can
+  capture. This project found that some tracked objects were classified
+  one way for a while and then a different way later in the same
+  tracking session -- which means a question like "what is this object's
+  classification" does not always have one unambiguous answer, and
+  picking how to define "the" answer is itself a real decision that
+  deserves to be made deliberately, with evidence, rather than by
+  accident or by whichever rule happened to be easiest to write first.
+
+- A "redundant index" is extra bookkeeping a database maintains that does
+  not actually help answer any question faster, because something else
+  already provides the same capability. Finding and removing this kind of
+  small inefficiency is a normal, ongoing part of database design review
+  -- not a sign that the original design was careless, just a sign that a
+  second, careful pass catches things a first pass reasonably misses.
+
+=========================================================
+EXECUTIVE SUMMARY
+=========================================================
+
+Before any schema.sql or database existed, this stage put the completed
+Stage 4 database design through a skeptical, checklist-driven review --
+re-examining every one of its 10 tables and 14 named key decisions, and
+gathering new, full-dataset evidence (not assumptions) for every question
+the existing project evidence had not already settled. The review found
+one genuine gap that would have caused a real implementation failure: the
+design never stated that two of its tables, both built from distinct
+values found inside other tables' data, must be fully loaded before
+anything referencing them, which a naturally-written single-pass loader
+would violate under foreign-key enforcement -- a concrete, tested-on-paper
+two-phase loading strategy was written to close this gap without weakening
+any constraint. The review also investigated two previously-unchecked
+protobuf fields relevant to the project's already-unresolved
+classification question, finding one worth adding to the schema (a
+per-track classification confidence score, now included) and confirming
+the other's original omission was already correct. In the course of that
+investigation, the review discovered that some persistent tracked objects
+genuinely change classification partway through their own history --
+meaning "the" classification of a track is itself an open modeling
+question, not a given fact, and five possible ways to define it were
+compared without picking one, since neither the data nor the assignment's
+wording justifies choosing on its own. Two minor redundant indexes were
+removed, several radar measurement fields were confirmed to carry no real
+signal in this file (with their units, previously unstated, confirmed
+from observed value patterns), and one implicit design choice was made
+explicit to prevent a future implementer from accidentally breaking it.
+Critically, zero of the 10 tables and zero of the 14 previously-approved
+key decisions were reversed -- the core architecture held up under
+skeptical review, and the two headline unresolved analytical questions
+from Stage 4 (the ~81% CV-incorporation target and the Drone/Airplane
+duration question) remain exactly as unresolved as before, now with
+stronger, more thoroughly checked evidence behind that conclusion rather
+than a manufactured answer. The design is now ready for actual
+implementation in the next stage.
+
+=========================================================
+PROJECT STATE
+=========================================================
+
+Files created:
+  docs/architecture/SCHEMA_REVIEW.md
+  docs/stages/STAGE_05A_SUMMARY.txt
+
+Files modified:
+  docs/architecture/DATABASE_DESIGN.md
+  docs/architecture/TABLE_GRAIN.md
+  docs/architecture/NORMALIZATION_DECISIONS.md
+  docs/architecture/ERD.md
+  docs/stages/STAGE_04_SUMMARY.txt
+
+Commands executed (verifiable from terminal history):
+  - Several read-only Python scripts run inline via the venv interpreter
+    against data/input/sanitized.mcap, decoding cv_tracks, track_states,
+    and radar_detections topics to check, at full-dataset scale:
+    class_distribution population/values on every cv_tracks track row;
+    object_class_external population on every track_states row;
+    object_class_confidence population/range on every track_states row;
+    per-persistent-track classification-change history across track_
+    states; radar range/azimuth/elevation/range_rate/snr/filter_type/
+    estimated_width_meters/is_marked value ranges and population; radar
+    and cv_detections/cv_tracks frame-level capture_time population;
+    track_states track_status distribution; and a plain arithmetic check
+    of 64-bit integer headroom for the observed nanosecond timestamp
+    range.
+  - A cross-document consistency check across docs/architecture/DATABASE_DESIGN.md,
+    docs/architecture/TABLE_GRAIN.md, docs/architecture/NORMALIZATION_DECISIONS.md, docs/architecture/ERD.md,
+    and docs/architecture/SCHEMA_REVIEW.md, comparing table names, grains, primary
+    keys, foreign keys, UNIQUE constraints, row-count figures, loading
+    order, and the unresolved-risk list.
+
+Tests executed:                None -- this stage produced no executable
+                                code to test; the existing 69-test suite
+                                from Stages 2-3 was not affected.
+
+Validation results:            Every new claim in docs/architecture/SCHEMA_REVIEW.md
+                                is cited to a specific full-dataset check;
+                                the cross-document consistency check found
+                                no disagreement across the five documents
+                                after corrections were applied.
+
+Git status at end of stage:    All 7 files above (2 new, 5 modified) are
+                                new/changed since Stage 4's work (itself
+                                still uncommitted as of this writing, per
+                                docs/stages/STAGE_04_SUMMARY.txt). No commit was
+                                made during this session.
+
+Recommended git commit message:
+  "Add Stage 5A skeptical schema review and apply corrections
+
+  Adds docs/architecture/SCHEMA_REVIEW.md: a 25-point skeptical review of the Stage 4
+  database design, covering unique-key risk, foreign-key validity,
+  loading order under PRAGMA foreign_keys = ON, hidden many-to-many
+  relationships, unit ambiguity, and timestamp precision, among other
+  checks. Applies evidence-justified corrections to docs/architecture/DATABASE_DESIGN.md,
+  docs/architecture/TABLE_GRAIN.md, docs/architecture/NORMALIZATION_DECISIONS.md, and docs/architecture/ERD.md:
+  a concrete two-phase ETL loading strategy (Section 5.12), two new
+  evidence-backed columns (object_class_confidence on cv_track_states and
+  fused_track_states), two radar columns renamed for confirmed units
+  (azimuth_rad, elevation_rad), two redundant indexes removed, and an
+  explicit non-enforcement note for cv_track_states.last_associated_
+  detection_id. No table, primary key, foreign key, or UNIQUE constraint
+  was reversed. The CV-incorporation and Drone/Airplane classification
+  discrepancies remain explicitly unresolved, now with additional
+  reinforcing evidence; a new open question (which semantic best defines
+  'the' classification of a fused track) is documented without being
+  resolved. No schema.sql, database, or ETL code is included --
+  documentation only."

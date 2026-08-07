@@ -1,0 +1,489 @@
+STAGE 9 SUMMARY — Dashboard UI Cleanup, Navigation Restructuring, SQL Queries Page
+=======================================================================
+
+OBJECTIVE
+---------
+Review the actual running Stage 8 Streamlit dashboard and the actual
+files on disk, then remove all emojis and AI-generated-sounding
+language, restructure navigation from audience-based pages (Executive/
+Operations/Technical/Query Explorer) to data-domain-based pages
+(Overview/CV Detections/CV Tracks/Fused Tracks/Data Quality/SQL
+Queries/Documentation), add a proper SQL Queries page with a read-only
+ad-hoc query editor, and write START_HERE.md as the project's main
+beginner navigation document. No change to the database schema or ETL
+pipeline. No Docker work.
+
+EXISTING UI REVIEWED
+--------------------
+Inspected the Stage 8 dashboard as built: dashboard/app.py and the four
+pages (1_Executive_Dashboard.py, 2_Operations_Dashboard.py,
+3_Technical_Dashboard.py, 4_Query_Explorer.py), dashboard/constants.py,
+dashboard/query_catalog.py, dashboard/formatting.py,
+dashboard/components/{sidebar,status,query_details,metrics,tables}.py,
+and dashboard/{database,sql_loader,charts}.py. Confirmed the dashboard
+reads data/output/sentry.db via a genuinely read-only connection
+(mode=ro + PRAGMA query_only = ON), confirmed the Query Explorer page
+only ran the 22 pre-approved .sql files under queries/ (no free-text
+SQL editor existed yet), and confirmed every page used emoji-prefixed
+titles/captions/buttons (Unicode box-drawing arrows in the architecture
+diagram, checkmark/warning icons on st.success/st.warning calls).
+
+FILES INSPECTED
+----------------
+dashboard/app.py, dashboard/constants.py, dashboard/query_catalog.py,
+dashboard/formatting.py, dashboard/database.py, dashboard/sql_loader.py,
+dashboard/charts.py, dashboard/components/sidebar.py,
+dashboard/components/status.py, dashboard/components/query_details.py,
+dashboard/components/metrics.py, dashboard/components/tables.py,
+dashboard/pages/1_Executive_Dashboard.py,
+dashboard/pages/2_Operations_Dashboard.py,
+dashboard/pages/3_Technical_Dashboard.py,
+dashboard/pages/4_Query_Explorer.py, tests/test_dashboard.py, all 22
+files under queries/, sql/schema.sql, docs/dashboard/DASHBOARD_GUIDE.md,
+README.md, .gitignore, and the live database at data/output/sentry.db
+(table/view list and column-level schema via `sqlite3 .schema`).
+
+FILES CREATED
+-------------
+dashboard/sql_validator.py            (read-only SQL statement validator)
+dashboard/pages/1_Overview.py
+dashboard/pages/2_CV_Detections.py
+dashboard/pages/3_CV_Tracks.py
+dashboard/pages/4_Fused_Tracks.py
+dashboard/pages/5_Data_Quality.py
+dashboard/pages/6_SQL_Queries.py
+dashboard/pages/7_Documentation.py
+tests/test_sql_validator.py           (18 tests)
+START_HERE.md
+docs/stages/STAGE_09_UI_AND_NAVIGATION_SUMMARY.txt   (this file)
+
+FILES MODIFIED
+--------------
+dashboard/constants.py       (PAGE_ICON emoji -> None; +DEFAULT_QUERY_ROW_LIMIT)
+dashboard/query_catalog.py   (page constants renamed to data-domain names;
+                               all _DASHBOARD_METADATA "pages" reassigned;
+                               module docstring documents the "no Radar
+                               page" decision)
+dashboard/formatting.py      (status_icon() -> status_word(), returns
+                               "OK"/"ATTENTION" text instead of an emoji)
+dashboard/components/status.py     (st.success/st.warning icon= kwargs
+                                     removed, replaced with "PASS:"/
+                                     "ATTENTION:" text prefixes)
+dashboard/components/query_details.py   (removed leading document emoji)
+dashboard/components/sidebar.py         (all emojis removed; page list
+                                          caption updated to the 7 new
+                                          names; ASCII arrows)
+dashboard/app.py             (title/caption simplified, emoji removed,
+                               "Pages" section rewritten for the 7 new
+                               pages, ASCII architecture diagram)
+tests/test_dashboard.py      (page-smoke-test file list updated to the 7
+                               new page files; embedded-SQL-detection
+                               test given a documented, narrow exception
+                               for pages/6_SQL_Queries.py's named
+                               examples, with 2 new tests verifying those
+                               examples are themselves read-only-valid
+                               and actually execute against a real
+                               database)
+docs/dashboard/DASHBOARD_GUIDE.md      (page list, architecture diagram, directory
+                               listing, and page descriptions rewritten
+                               for the 7 new pages; all emojis removed)
+README.md                    (added a prominent START_HERE.md link and a
+                               documentation index table; dashboard page
+                               list rewritten for the 7 new pages, all
+                               emojis removed)
+.gitignore                   (critical fix -- see PROBLEMS DISCOVERED)
+
+FILES DELETED
+-------------
+dashboard/pages/1_Executive_Dashboard.py   (content migrated into
+                                             1_Overview.py, 2_CV_Detections.py,
+                                             4_Fused_Tracks.py)
+dashboard/pages/2_Operations_Dashboard.py  (content migrated into
+                                             3_CV_Tracks.py, 4_Fused_Tracks.py)
+dashboard/pages/3_Technical_Dashboard.py   (content migrated into
+                                             5_Data_Quality.py)
+dashboard/pages/4_Query_Explorer.py        (content migrated into the
+                                             "Approved queries" section
+                                             of 6_SQL_Queries.py)
+None of these four files were ever committed to git (the whole
+dashboard/ directory was untracked at the start of this stage), so no
+git history rewrite was needed for this deletion.
+
+EMOJI AND AI-STYLE LANGUAGE REMOVED
+------------------------------------
+Removed every pictograph/emoji character from dashboard/ (page icons,
+titles, captions, button labels, st.success/st.warning icon= kwargs,
+Unicode box-drawing arrows in architecture diagrams) and from the two
+user-facing docs that referenced the old page names (docs/
+DASHBOARD_GUIDE.md, README.md). Verified with a repo-wide scan (see
+COMMANDS VERIFIED) that scans dashboard/**/*.py plus every root/docs
+.md/.txt file, excluding STAGE_0N_SUMMARY.txt, PROJECT_TIMELINE.txt,
+and the four checksum-investigation historical documents
+(CHECKSUM_RESOLUTION.md, CHECKSUM_REINVESTIGATION.md,
+CHECKSUM_ROOT_CAUSE_ANALYSIS.md, SOURCE_FIDELITY_CORRECTION.md), which
+are explicitly preserved unchanged as the historical evidentiary record
+of the Stage 6B checksum investigation -- one of those documents
+contains a single unrelated star character (★) inside a data table that
+was deliberately left alone rather than risk altering a frozen
+investigation record. No promotional/exaggerated language ("Powerful
+Insights", "Smart Analytics", "Unlock Insights", "AI-Powered", etc.) was
+found anywhere in the dashboard to begin with; the existing captions
+were already plainly descriptive.
+
+FINAL PAGE AND TAB STRUCTURE
+------------------------------
+1. Overview           -- system-wide counts, both headline checksum results.
+2. CV Detections       -- individual camera detections and incorporation.
+3. CV Tracks            -- persistent camera-tracked objects and state history.
+4. Fused Tracks          -- persistent fused (tower) tracked objects.
+5. Data Quality           -- pipeline health and relational-integrity checks.
+6. SQL Queries             -- approved queries + read-only ad-hoc editor.
+7. Documentation            -- index of design/analysis documents.
+
+No "Radar" page was created: no query in the 22-file library performs
+radar-specific analysis (radar_detections' own row count already
+appears in Data Quality's row-count reconciliation), so a standalone
+Radar tab would have had no real functionality behind it. This decision
+is documented in dashboard/query_catalog.py's module docstring, in
+docs/dashboard/DASHBOARD_GUIDE.md, and here, per "do not claim functionality that
+does not exist."
+
+FUNCTIONAL BEHAVIOR OF EVERY PAGE
+------------------------------------
+Every page begins with a 1-2 sentence description naming the table(s)/
+view(s) it queries. Overview: recording_overview, cv_incorporation_
+summary, cv_detection_to_track_funnel, fused_track_duration_by_type,
+data_quality_issue_summary, table_row_count_reconciliation (2 KPI rows,
+funnel chart, duration comparison chart, issue table, Key Findings).
+CV Detections: cv_incorporation_summary, cv_detection_to_track_funnel,
+cv_focus_quality_vs_incorporation (KPI cards, funnel chart, bar chart).
+CV Tracks: longest_lived_tracks (filtered to cv_track), cv_track_history
+(track-ID selector + line chart, drill-down), cv_detection_quality_vs_
+track_persistence (scatter chart). Fused Tracks: fused_track_duration_
+by_type, longest_lived_tracks (filtered to fused_track), fused_track_
+history (fused-track-ID selector + line chart, drill-down), sensor_
+contributions_per_fused_track, sensor_utilization_summary, object_
+class_changes_over_time, fused_track_classification_stability_vs_
+measurement_support, multi_sensor_tracks_duration_comparison,
+fused_track_duration_by_sensor_combination. Data Quality: live database
+metadata, live PRAGMA integrity_check/foreign_key_check, an optional
+"Run validation" button (subprocess to the unchanged scripts/
+run_validation.py), all 6 technical queries with pass/fail banners,
+data_quality_issue_summary. SQL Queries: see below. Documentation:
+static list of file paths with one-line descriptions, reads no data.
+
+DATABASE PATH AND CONNECTION BEHAVIOR
+----------------------------------------
+data/output/sentry.db (dashboard/constants.py::DEFAULT_DB_PATH). Every
+page checks database.get_database_metadata()/connect_read_only() and
+shows a clear "No database found" message with the exact build command
+(python scripts/build_database.py --rebuild) if the file is missing,
+rather than crashing. Every connection, on every page and in the SQL
+Queries page's ad-hoc editor, is opened via
+sqlite3.connect(f"file:{path}?mode=ro", uri=True) plus
+PRAGMA query_only = ON (dashboard/database.py::connect_read_only) --
+genuinely read-only at the SQLite layer, not by convention; verified in
+tests/test_dashboard.py::test_database_opens_read_only.
+
+SQL QUERY INTERFACE BEHAVIOR
+--------------------------------
+The SQL Queries page has two sections. (1) Approved queries: the
+existing category-filter/query-picker/parameters/Run/results-table/CSV-
+download flow, unchanged in behavior, migrated from the old Query
+Explorer page. (2) Query editor: a free-text st.text_area, 8 named
+example queries that prefill it (row counts by major table, CV
+detection incorporation, CV track summaries, fused track duration by
+class, Drone and Airplane comparison, classification counts, radar
+observations, data-quality checks), a "Run Query" button, a results
+table, a row-count caption, a default row limit of 1,000
+(DEFAULT_QUERY_ROW_LIMIT), and a clear error message for invalid SQL
+(from the validator) or a SQLite execution error (sqlite3.Error caught
+and shown as "SQL error: ..."). Empty results show "0 row(s) returned."
+without crashing. SELECT/WITH statements are wrapped in
+"SELECT * FROM (...) LIMIT 1000" before execution; PRAGMA/EXPLAIN
+statements are run as-is (they cannot be wrapped as a subquery) -- this
+was caught and fixed during implementation, see PROBLEMS FIXED.
+
+READ-ONLY QUERY PROTECTIONS
+-------------------------------
+dashboard/sql_validator.py::validate_read_only_sql() is defense-in-
+depth on top of (not a substitute for) the mode=ro + PRAGMA query_only
+connection every page already uses. It: strips line (--) and block
+(/* */) comments before any other check, specifically so a keyword or
+statement separator hidden in a comment cannot bypass validation;
+rejects multiple statements by counting non-empty segments after
+splitting on ';'; requires the (comment-stripped) statement to begin
+with SELECT, WITH, EXPLAIN, or PRAGMA; and then searches the entire
+statement -- not just its first word -- for any of 10 forbidden
+keywords (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, REPLACE, ATTACH,
+DETACH, VACUUM) as a whole word, anywhere in the text. Documented
+trade-off: a forbidden keyword is rejected even inside what could be a
+string literal (e.g. SELECT 'DROP' AS label is rejected) -- this
+validator favors over-rejection over risking a missed bypass. 18 unit
+tests in tests/test_sql_validator.py cover valid statements, all 10
+forbidden keywords, multi-statement rejection (plain and comment-
+obscured), and comment-hidden-but-harmless forbidden text.
+
+START_HERE.MD STRUCTURE
+---------------------------
+Written with the 16 required sections: what this project does, project
+structure, required software, input file location, fastest way to run
+the project, dashboard URL, how to run with Docker (placeholder only,
+per explicit instruction -- no Docker commands invented), how to run
+without Docker, SQLite database path, how to run all provided SQL
+queries, how to run one query manually, how to use the dashboard, how
+to run tests, expected outputs, common problems, recommended review
+order.
+
+COMMANDS VERIFIED
+---------------------
+Every command in START_HERE.md was actually run from the repository
+root during this stage: `python scripts/build_database.py` (no
+--rebuild, against an already-built database, exits 0 and reports
+"Existing database is complete and valid"), `python scripts/
+run_validation.py`, `python scripts/run_analytics.py --list`,
+`--category executive/operational/technical/general`, `--category
+operational --param track_id=... --param fused_track_id=...`, `--query
+cv_incorporation_summary`, `--all` (confirmed the two parameterized-
+query errors are the only reason for its nonzero exit -- documented as
+expected in START_HERE.md), the sqlite3 introspection commands (.tables,
+schema-view listing, .schema, PRAGMA integrity_check, PRAGMA
+foreign_key_check), and `pytest` / the per-subset pytest commands. A
+repo-wide emoji scan (Python script over dashboard/**/*.py and every
+root/docs .md/.txt file, with the historical-document exclusions listed
+above) was run and returned zero matches after all fixes.
+
+DOCKER COMMANDS VERIFIED
+----------------------------
+None. Per explicit instruction, Docker is not implemented, tested, or
+documented in this stage. START_HERE.md Section 7 contains only the
+required placeholder text and no invented Dockerfile paths, Compose
+services, ports, volumes, or build/run commands. No Dockerfile,
+compose.yaml, docker-compose.yml, .dockerignore, or container script
+was created or modified.
+
+LOCAL PYTHON COMMANDS VERIFIED
+-----------------------------------
+All of: python3 -m venv .venv / source .venv/bin/activate / pip install
+-r requirements.txt (environment already existed and was reused, not
+recreated, but the same commands were confirmed correct against it);
+python scripts/build_database.py [--rebuild]; python scripts/
+run_validation.py [--skip-rederivation]; python scripts/run_analytics.py
+(all documented flag combinations, see COMMANDS VERIFIED); streamlit
+run dashboard/app.py (started successfully, see PROBLEMS DISCOVERED/
+FIXED for the one page bug this surfaced); pytest and every documented
+pytest subset command.
+
+TESTS RUN
+-------------
+`pytest` (full suite): 274 passed, 0 failed. This includes
+tests/test_dashboard.py (25 tests, including a parametrized 8-page
+AppTest smoke test covering app.py and all 7 new pages) and the new
+tests/test_sql_validator.py (18 tests). `python -m py_compile` across
+every file in dashboard/, dashboard/pages/, and dashboard/components/:
+no syntax errors. `sqlite3 ... PRAGMA integrity_check` and `PRAGMA
+foreign_key_check` against the live database: both clean, as already
+covered by the Data Quality page and the existing validation suite.
+
+PROBLEMS DISCOVERED
+------------------------
+1. dashboard/pages/2_CV_Detections.py referenced a nonexistent
+   DataFrame column ("incorporated_detections" instead of the query's
+   actual column, "incorporated_cv_detections") -- caught immediately
+   by the AppTest page-smoke test, not by manual inspection.
+2. The SQL Queries page's row-limit wrapper ("SELECT * FROM (...)
+   LIMIT N") is invalid SQL when the inner statement is PRAGMA or
+   EXPLAIN, since neither can appear inside a subquery -- caught before
+   it shipped, while writing the test that executes all 8 named
+   examples plus a PRAGMA/EXPLAIN case through the real wrapper logic.
+3. Critical, pre-existing, unrelated-to-this-stage's-original-scope
+   finding made while fact-checking START_HERE.md's "input file
+   location" section: data/input/sanitized.mcap (the raw source MCAP
+   file) was already committed to git in commit d3df408 ("Track
+   original MCAP input and update gitignore") and that commit was
+   already pushed to origin/main -- a direct violation of CLAUDE.md
+   rule 2 ("Never commit... the MCAP file"). The same commit had also
+   added two erroneous `!data/output/sentry.db` negation lines to
+   .gitignore, which would have caused a future `git add -A` to commit
+   the generated database too, violating the same rule a second way.
+   data/output/sentry.db itself had never actually been staged/
+   committed at the time this was found.
+
+PROBLEMS FIXED
+-------------------
+1. Fixed the column-name bug in 2_CV_Detections.py
+   (formatting.format_count(row["incorporated_cv_detections"])) and
+   re-ran the full AppTest suite to confirm.
+2. Fixed the SQL Queries page to only wrap SELECT/WITH statements in
+   the LIMIT subquery; PRAGMA/EXPLAIN statements run unwrapped (their
+   own results are already small and bounded by SQLite itself). Added
+   tests/test_dashboard.py::test_sql_queries_page_example_queries_
+   execute, which runs all 8 named examples through the exact wrapper
+   logic against a real database.
+3. Presented the git-history finding to the user with three concrete
+   options (untrack going forward only / purge from all history via
+   git filter-repo + force-push / leave it for now) and their exact
+   consequences; the user chose "purge from all history." Executed as:
+   backed up data/input/sanitized.mcap outside the repo and recorded
+   its MD5 (e32b641c93b84861d855b01a79ea09d0) before touching anything;
+   stashed all uncommitted work (`git stash push -u`) so the rewrite's
+   working-tree reset could not lose it; installed git-filter-repo
+   (Homebrew); ran `git filter-repo --path data/input/sanitized.mcap
+   --invert-paths --force`, which rewrote all 6 commits and (expectedly)
+   removed the now-untracked file from the working tree along with it;
+   immediately restored the file from the pre-rewrite backup and
+   re-verified its MD5 matched exactly, confirming CLAUDE.md rule 1
+   ("never modify... the source MCAP file") held throughout despite the
+   file briefly not existing on disk mid-operation; re-added the
+   `origin` remote (git filter-repo removes it as a safety measure);
+   force-pushed the rewritten history to origin/main; popped the stash
+   and confirmed `git status` showed the exact same set of modified/
+   untracked files as before the rewrite. Also removed the two
+   erroneous `!data/output/sentry.db` .gitignore negation lines, and
+   added an explicit `data/input/*` / `!data/input/.gitkeep` ignore
+   rule (mirroring the existing data/output/ pattern) so neither file
+   can be accidentally re-added by a future `git add -A`. Re-verified
+   with `git check-ignore -v` that both data/input/sanitized.mcap and
+   data/output/sentry.db are now correctly ignored, and re-ran the full
+   pytest suite (274 passed) after the restore to confirm nothing else
+   was affected.
+
+REMAINING LIMITATIONS
+--------------------------
+No lint or type-check tool (ruff, mypy, flake8) is configured anywhere
+in this project -- pytest remains the only automated check, honestly
+stated in START_HERE.md rather than inventing a command that doesn't
+exist. Docker support remains entirely unimplemented (Section 7 of
+START_HERE.md is a placeholder only, as instructed). The SQL Queries
+page's ad-hoc editor is validated syntactically (single read-only
+statement, no forbidden keyword) but not semantically -- a
+syntactically valid but nonsensical query (e.g. referencing a
+nonexistent column) will still reach SQLite and surface as a normal
+"SQL error:" message, which is the intended, sufficient behavior. The
+git-history rewrite means anyone who had already cloned or forked the
+repository before this stage has a now-divergent history and will need
+to re-clone or reset to the new origin/main.
+
+NEXT RECOMMENDED STAGE
+---------------------------
+Docker support (build a Dockerfile/compose setup for the ETL pipeline
+and dashboard), explicitly deferred from this stage per instruction.
+
+ADDENDUM -- DOCUMENTATION CONSOLIDATION AND DATA-DICTIONARY CLEANUP
+=======================================================================
+A follow-on documentation-only cleanup, done later in this same stage.
+No ETL, database schema, SQL query, or dashboard behavior was changed
+-- confirmed by re-running the full pytest suite (274 passed) after
+every edit below.
+
+Checksum documents consolidated:
+  docs/CHECKSUM_ROOT_CAUSE_ANALYSIS.md and docs/CHECKSUM_REINVESTIGATION.md
+  were read in full, and every piece of unique, still-relevant evidence
+  not already present in docs/analytics/CHECKSUM_RESOLUTION.md was merged into
+  it: an "Approval record" section stating Anduril reviewed and
+  confirmed the interpretation (previously asserted elsewhere in the
+  project -- docs/analytics/ANALYTICAL_INSIGHTS.md, docs/stages/STAGE_07_SUMMARY.txt --
+  but never actually recorded in CHECKSUM_RESOLUTION.md itself, since
+  that document had been left frozen at "Phase 1-3, awaiting approval"
+  even though Phase 4 was clearly implemented in Stage 6B/7); a new
+  Section 1A.1 (independent from-scratch verification script
+  cross-check); a new Section 1A.2 (the fusion system's own internal
+  bookkeeping referencing two CV track ids, 81586/81615, that do not
+  exist anywhere in this file's cv_tracks topic -- documented as a
+  limitation, not a root cause); a caveat in Section 2.1 (the accepted
+  Drone group is not sensor-pure -- it merges a 9-track camera+radar
+  population). Sections 3.7/3.8 (the Phase 4 proposal) were rewritten
+  from "illustrative, not yet applied" draft SQL to describe what was
+  actually implemented (sql/views.sql::v_fused_track_type_basis,
+  queries/fused_track_duration_by_type.sql,
+  queries/executive/cv_incorporation_summary.sql,
+  tests/test_checksum_queries.py -- verified against the live files,
+  not assumed). The closing "Awaiting your approval" section was
+  replaced with an "Approval record" confirming all four original
+  questions were resolved. Repetitive investigation history (duplicate
+  enum/field-inventory tables, a smaller root-cause summary table
+  covering the same ground as the canonical Phase 1A table, the
+  four-topic-vs-relational-model comparison, which is a database-design
+  question rather than a checksum question) was deliberately not
+  copied over, per instruction to remove repetitive history and
+  abandoned hypotheses.
+
+Files deleted:
+  docs/CHECKSUM_REINVESTIGATION.md
+  docs/CHECKSUM_ROOT_CAUSE_ANALYSIS.md
+
+References updated (repo-wide search for the two deleted filenames,
+every hit fixed except plain historical narrative prose that names them
+for provenance -- not a link -- which was left as an accurate record of
+what existed at the time it was written):
+  docs/analytics/ANALYTICAL_INSIGHTS.md      -- Key Finding 1's citation
+  docs/architecture/DATABASE_DESIGN.md          -- Section 3's Stage 6B update note
+  docs/stages/STAGE_06_SUMMARY.txt        -- Stage 6B addendum scope line
+  dashboard/pages/7_Documentation.py -- Documentation page's file index
+  docs/analytics/CHECKSUM_RESOLUTION.md      -- one internal dead cross-reference
+                                       (a citation to the now-deleted
+                                       file's Section 9.2) repointed to
+                                       this document's own Section 2.1
+
+Data-dictionary inconsistencies corrected (docs/data/DATA_DICTIONARY.md,
+verified against a live build of data/output/sentry.db and against
+sql/schema.sql/sql/indexes.sql directly, not assumed):
+  - "3 groups" corrected to "11 analytical tables organized into 5
+    functional groups" (provenance, CV, radar, fusion, data quality),
+    with schema_version documented separately as infrastructure, not
+    one of the 11.
+  - cv_track_class_distribution added to the table of contents (it was
+    documented in the body but missing from the TOC) and given the
+    same 9-column detailed format as every other table (purpose,
+    grain, exact row count -- 37,984, confirmed live -- every column
+    with type/nullable/PK/FK/UNIQUE/source path/meaning/units/cleaning,
+    and its own Constraints and indexes subsection).
+  - All 14 sections reordered into the exact sequence specified:
+    source_messages, cv_detections, cv_tracks, cv_track_states,
+    cv_track_class_distribution, cv_detection_track_links,
+    radar_detections, fused_tracks, fused_track_states,
+    fused_track_measurements, data_quality_issues, schema_version,
+    Views, Common queries.
+  - The 4 schema-version-2 cv_detections fields (focus_quality_raw,
+    focus_quality_name, focus_score, sharpness), previously kept in a
+    disconnected preliminary table, are now integrated directly into
+    cv_detections' main column table, each with a short "Added in
+    schema version 2" note.
+  - schema_version given its own small section, explicitly stated as
+    not one of the 11 analytical tables.
+  - The common row-count query updated to include
+    cv_track_class_distribution, with its expected count (37,984)
+    stated directly beneath the query.
+  - Every table section given a new "Constraints and indexes"
+    subsection, transcribed directly from sql/schema.sql and
+    sql/indexes.sql (primary keys, foreign keys, UNIQUE/CHECK
+    constraints, and every named index) -- no constraint was invented;
+    two cases (cv_track_states.source_message_id,
+    fused_track_states.fused_track_id) explicitly note that a
+    single-column index was deliberately omitted because it's already
+    covered by a UNIQUE constraint's automatic index
+    (docs/architecture/SCHEMA_REVIEW.md finding F3).
+  - Every table/column/row-count fact was independently verified
+    against a fresh `sqlite3 data/output/sentry.db` session (PRAGMA
+    table_info per table, full row-count query) before being written,
+    not carried over from the previous document unchecked.
+
+Verification performed:
+  - Every table in the live database (11 analytical + schema_version)
+    confirmed present in the Table of contents.
+  - Repo-wide grep for the two deleted filenames: zero remaining
+    references except accurate historical narrative prose (not links)
+    and this document's own earlier, now-historical section describing
+    what existed at that point in the stage.
+  - Every one of DATA_DICTIONARY.md's 14 internal `#anchor` links
+    cross-checked against its 14 actual section headers: all resolve.
+  - Every one of dashboard/pages/7_Documentation.py's 29 referenced
+    file paths confirmed to exist on disk.
+  - `git diff --check` (via `git add -N` on the untracked doc files,
+    then `git reset` afterward -- no content staged or discarded) found
+    no whitespace errors.
+  - Full pytest suite re-run after all edits: 274 passed, 0 failed.
+  - `python -m py_compile` on dashboard/pages/7_Documentation.py: no
+    syntax errors.
+
+No production code, SQL, or generated database file was touched.

@@ -1,0 +1,44 @@
+Stage 5B — SQLite Schema Implementation
+
+Objective
+---------
+Implemented the reviewed logical database design as a physical SQLite schema.
+
+Files Created
+-------------
+- sql/schema.sql
+- sql/indexes.sql
+- sql/views.sql
+- sql/validation.sql
+- src/cuas_etl/database.py
+- tests/test_schema.py
+
+What Was Built
+--------------
+- 10 reviewed tables
+- schema_version infrastructure table
+- PKs
+- FKs
+- UNIQUE constraints
+- indexes
+- validation SQL
+- views
+
+Validation
+----------
+- 108 tests passed
+- integrity_check passed
+- foreign_key_check passed
+
+Not Yet Done
+------------
+- no MCAP decoding
+- no cleaning
+- no normalization
+- no SQLite rows
+- no ETL
+
+Next Stage
+----------
+Stage 6 builds the ETL pipeline that reads sanitized.mcap, cleans it,
+normalizes it, and populates sentry.db.

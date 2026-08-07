@@ -17,8 +17,8 @@ Generated:      2026-08-05
 
 This summary was generated retrospectively from verified project artifacts.
 
-SOURCES USED: CLAUDE.md, AGENTS.md, docs/MCAP_INSPECTION.md (Stage 2's
-report, used as a direct input here), docs/KEY_ANALYSIS.md,
+SOURCES USED: CLAUDE.md, AGENTS.md, docs/data/MCAP_INSPECTION.md (Stage 2's
+report, used as a direct input here), docs/data/KEY_ANALYSIS.md,
 data/output/key_analysis.json, data/output/mcap_schema_report.json, the
 source code of scripts/analyze_keys.py and
 src/mcap_inspection/key_analysis.py, the tests in
@@ -473,7 +473,7 @@ scripts/analyze_keys.py (993 lines)
   Inputs: data/input/sanitized.mcap (read-only) and
   data/output/mcap_schema_report.json (Stage 2's output, read as a
   starting point).
-  Outputs: data/output/key_analysis.json and docs/KEY_ANALYSIS.md.
+  Outputs: data/output/key_analysis.json and docs/data/KEY_ANALYSIS.md.
   Generated or handwritten: handwritten.
   Should it be committed to git: yes -- not yet committed as of this
   writing; recommended for commit.
@@ -481,7 +481,7 @@ scripts/analyze_keys.py (993 lines)
   source data changes, and as a design reference for the future ETL
   stage's own detection-to-track and message-identity logic.
 
-docs/KEY_ANALYSIS.md (183 lines)
+docs/data/KEY_ANALYSIS.md (183 lines)
   Purpose: the human-readable report for this stage -- concept-discovery
   results, the per-field 15-point statistics table, persistent-entity
   analysis, the detection-to-track relationship findings, namespace
@@ -631,7 +631,7 @@ because this stage and Stage 2 together have already answered the
 questions a schema design needs answered first: what does the data
 actually contain (Stage 2), and which specific fields are trustworthy
 enough, and related enough, to become real keys (Stage 3). Expected
-inputs to Stage 4: docs/MCAP_INSPECTION.md, docs/KEY_ANALYSIS.md, and both
+inputs to Stage 4: docs/data/MCAP_INSPECTION.md, docs/data/KEY_ANALYSIS.md, and both
 JSON reports, used as the evidence base for every schema decision, plus a
 fresh reading of the source file itself for the actual data load. Expected
 outputs: a documented schema (with assumptions explained in
@@ -764,7 +764,7 @@ Files created:
   src/mcap_inspection/key_analysis.py
   scripts/analyze_keys.py
   tests/test_key_analysis.py
-  docs/KEY_ANALYSIS.md
+  docs/data/KEY_ANALYSIS.md
   data/output/key_analysis.json (generated; gitignored, not committed)
 
 Files modified:               None (all new files; Stage 2's files were
@@ -793,7 +793,7 @@ Validation results:            py_compile clean; pytest 69/69 passed;
 
 Git status at end of stage:    The five files/outputs above are new since
                                 Stage 2's commit (15adf58). As of this
-                                writing, docs/KEY_ANALYSIS.md,
+                                writing, docs/data/KEY_ANALYSIS.md,
                                 scripts/analyze_keys.py,
                                 src/mcap_inspection/key_analysis.py, and
                                 tests/test_key_analysis.py are untracked
