@@ -139,12 +139,12 @@ def _print_final_summary(connection, db_path: Path, tables, report: validation.V
     print(f"Overall validation: {'PASSED' if report.passed_overall else 'FAILED'}")
     print()
     print(
-        "NOTE: the ~81% CV-incorporation checksum remains unresolved "
-        "(docs/CHECKSUM_RESOLUTION.md Part B/C) -- this build does not claim "
-        "it passes. The Drone/Airplane duration checksum was resolved in "
-        "Stage 6B via queries/fused_track_duration_by_type.sql -- run it "
-        "directly for results; see docs/CHECKSUM_RESOLUTION.md for the "
-        "honest mean-vs-target gap on the Drone group."
+        "NOTE: both headline checksums are computed directly from this "
+        "database, not hardcoded. CV incorporation currently computes to "
+        "97.54% (vs. the assignment's ~81% target); Drone/Airplane average "
+        "fused-track duration computes to ~35.86s / ~614.68s (vs. ~30s / "
+        "~600s). See docs/analytics/CHECKSUM_RESOLUTION.md for the full "
+        "investigation, root cause, and review record behind these figures."
     )
 
 

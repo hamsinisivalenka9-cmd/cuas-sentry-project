@@ -44,6 +44,7 @@ _doc_section(
     [
         ("START_HERE.md", "Step-by-step replication instructions: setup, build, validate, run the dashboard, run tests."),
         ("README.md", "Concise project overview and dashboard summary."),
+        ("DESIGN.md", "Concise architecture and design-decision overview -- what the project does, the data model, the ETL flow, and trade-offs."),
     ],
 )
 
@@ -95,6 +96,15 @@ _doc_section(
     [
         ("CLAUDE.md", "The project's governing objective, critical rules, and expected analytical checks (used to direct AI-assisted work in this repository)."),
         ("AGENTS.md", "An equivalent copy of the project instructions for AI agents/tools that read AGENTS.md instead of CLAUDE.md."),
+        ("docs/project/AI_USAGE.md", "Disclosure of how an AI coding assistant was used to build this project, and what the submitter verified personally."),
+    ],
+)
+
+st.markdown("---")
+_doc_section(
+    "Submission audit",
+    [
+        ("docs/project/FINAL_SUBMISSION_AUDIT.md", "Final submission-quality audit: deliverables verified, test/validation results, Docker and clean-room verification, and archive contents."),
     ],
 )
 

@@ -63,3 +63,13 @@ __pycache__/
 # =====================================================
 
 *.log
+
+
+# =====================================================
+# SUBMISSION PACKAGING
+# =====================================================
+
+# The final submission archive is a generated packaging artifact (a
+# snapshot of the repo at pack time) -- not source, and stale the
+# moment anything else changes. Never committed.
+Hamsini_Sivalenka.zip

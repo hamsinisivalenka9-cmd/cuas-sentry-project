@@ -1,0 +1,27 @@
+# Version control and local environment -- never needed inside the image.
+.git
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.pyc
+
+# Databases -- the generated SQLite database is built at container
+# startup from the host-mounted source file; it is never baked into
+# the image (CLAUDE.md rule 2: never commit/ship the generated database).
+*.db
+*.sqlite
+*.sqlite3
+
+# Source data -- the source MCAP file is provided at runtime via the
+# ./data:/app/data bind mount, never copied into the image
+# (CLAUDE.md rule 2: never commit/ship the source MCAP file).
+data/input/sanitized.mcap
+data/output/*
+
+# Large documentation assets not needed at runtime.
+docs/images/
+
+# OS metadata.
+.DS_Store

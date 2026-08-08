@@ -1,0 +1,20 @@
+# CUAS Sentry -- single-container Docker setup. SQLite remains the
+# database and Streamlit remains the application server; no other
+# services are introduced.
+#
+# Usage:
+#   docker compose up --build     # build the image and start the app
+#   docker compose down            # stop and remove the container
+#
+# Requires data/input/sanitized.mcap to exist on the host before
+# starting -- see START_HERE.md.
+
+services:
+  cuas-sentry:
+    build: .
+    container_name: cuas-sentry
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    restart: "no"
