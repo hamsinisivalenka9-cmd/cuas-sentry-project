@@ -61,7 +61,7 @@ what queries exist and how to run them safely.
 
 ```
 dashboard/
-    app.py                 # entry point: streamlit run dashboard/app.py
+    CUAS_Sentry.py          # entry point: streamlit run dashboard/CUAS_Sentry.py
     database.py             # read-only connection, DB metadata, integrity checks
     sql_loader.py            # query discovery + execution -> DataFrame
     query_catalog.py          # presentation metadata (chart type, page placement)
@@ -98,7 +98,7 @@ originally proposed structure:
 - `dashboard/components/sidebar.py` — Streamlit's multipage model runs
   each `pages/*.py` file as an independent script; the sidebar (project
   overview, database status, navigation) needed to live somewhere every
-  page could import without re-triggering `app.py`'s own
+  page could import without re-triggering `CUAS_Sentry.py`'s own
   `st.set_page_config()` call. This is the smallest addition that keeps
   the sidebar consistent across all 8 scripts.
 
@@ -127,7 +127,7 @@ python scripts/build_database.py --rebuild
 source .venv/bin/activate   # or your environment of choice
 pip install -r requirements.txt
 python scripts/build_database.py --rebuild   # if sentry.db doesn't exist yet
-streamlit run dashboard/app.py
+streamlit run dashboard/CUAS_Sentry.py
 ```
 
 Streamlit will open the app in your browser (default `http://localhost:8501`)
@@ -289,4 +289,4 @@ which query produced its input.
 | A page shows stale numbers after a rebuild | Cached query results | Click "Refresh cached results" in the sidebar, or restart the app |
 | `QueryNotFoundError` on the SQL Queries page | Shouldn't happen via the UI (closed dropdown) — only possible by calling `sql_loader.run_query()` directly with a typo | Check `sql_loader.discover_queries()` for valid names |
 | A chart shows "—" for a KPI | The underlying query returned an empty/unexpected result | Open the query's source expander beneath the chart and re-run it on the SQL Queries page to inspect |
-| `streamlit run` fails with an import error | Repo root not on `sys.path` | Every page/app.py file inserts `REPO_ROOT` at the top before any `dashboard.*` import — confirm you're running `streamlit run dashboard/app.py` from the repo root |
+| `streamlit run` fails with an import error | Repo root not on `sys.path` | Every page and entry-point (`CUAS_Sentry.py`) file inserts `REPO_ROOT` at the top before any `dashboard.*` import — confirm you're running `streamlit run dashboard/CUAS_Sentry.py` from the repo root |

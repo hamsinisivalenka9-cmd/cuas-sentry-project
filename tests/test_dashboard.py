@@ -404,7 +404,7 @@ def test_result_columns_match_pages_expectations(real_db_path):
 # 13. Dashboard modules import successfully
 # ===========================================================================
 #
-# app.py and pages/*.py contain top-level Streamlit calls
+# CUAS_Sentry.py and pages/*.py contain top-level Streamlit calls
 # (st.set_page_config, render_sidebar(), etc.) that require an active
 # Streamlit ScriptRunContext to execute correctly -- a bare `import`
 # outside that context (as a plain pytest test would do) is not a
@@ -434,7 +434,7 @@ def test_core_library_modules_import_successfully():
 #
 # These run against whatever is currently built at data/output/sentry.db
 # (each page reads dashboard.constants.DEFAULT_DB_PATH internally, the
-# same way a real user launching `streamlit run dashboard/app.py`
+# same way a real user launching `streamlit run dashboard/CUAS_Sentry.py`
 # would) rather than the isolated per-test fixture database used
 # elsewhere in this file -- AppTest exercises the actual page scripts
 # as Streamlit would run them, which is the point of this check.
@@ -450,7 +450,7 @@ pytestmark_requires_real_db = pytest.mark.skipif(
 @pytest.mark.parametrize(
     "script_path",
     [
-        DASHBOARD_DIR / "app.py",
+        DASHBOARD_DIR / "CUAS_Sentry.py",
         PAGES_DIR / "1_Overview.py",
         PAGES_DIR / "2_CV_Detections.py",
         PAGES_DIR / "3_CV_Tracks.py",
@@ -459,7 +459,7 @@ pytestmark_requires_real_db = pytest.mark.skipif(
         PAGES_DIR / "6_SQL_Queries.py",
         PAGES_DIR / "7_Documentation.py",
     ],
-    ids=["app", "overview", "cv_detections", "cv_tracks", "fused_tracks", "data_quality", "sql_queries", "documentation"],
+    ids=["cuas_sentry_entry", "overview", "cv_detections", "cv_tracks", "fused_tracks", "data_quality", "sql_queries", "documentation"],
 )
 def test_page_renders_without_exception(script_path):
     from streamlit.testing.v1 import AppTest

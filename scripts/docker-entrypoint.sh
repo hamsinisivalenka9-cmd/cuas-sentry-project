@@ -29,7 +29,7 @@ echo "Building the database if needed, or validating it if it already exists..."
 python scripts/build_database.py
 
 echo "Starting the Streamlit dashboard at http://0.0.0.0:8501 ..."
-exec streamlit run dashboard/app.py \
+exec streamlit run dashboard/CUAS_Sentry.py \
     --server.address=0.0.0.0 \
     --server.port=8501 \
     --server.headless=true

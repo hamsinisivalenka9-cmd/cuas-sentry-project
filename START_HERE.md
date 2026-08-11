@@ -112,7 +112,7 @@ data/input/sanitized.mcap (protobuf/MCAP)
     -> data/output/sentry.db (SQLite)
     -> validated (scripts/run_validation.py)
     -> queried (sqlite3, DBeaver, queries/*.sql, scripts/run_analytics.py)
-    -> visualized (Streamlit dashboard, dashboard/app.py)
+    -> visualized (Streamlit dashboard, dashboard/CUAS_Sentry.py)
 ```
 
 A few things worth knowing up front:
@@ -226,7 +226,7 @@ then starts one container that:
    Python workflow, unmodified — it builds `data/output/sentry.db` if
    missing, or just validates it (without rebuilding) if it already
    exists.
-3. Starts the same `streamlit run dashboard/app.py`, bound to
+3. Starts the same `streamlit run dashboard/CUAS_Sentry.py`, bound to
    `0.0.0.0:8501` inside the container and published to
    `localhost:8501` on the host.
 
@@ -313,7 +313,7 @@ question, and a formatted result table.
 ## 9. Launch the dashboard
 
 ```bash
-streamlit run dashboard/app.py
+streamlit run dashboard/CUAS_Sentry.py
 ```
 
 Opens at **http://localhost:8501** (only while this command is
@@ -415,7 +415,7 @@ configured in this project — `pytest` is the only automated check.
 | `FileNotFoundError` / "MCAP file not found" | Place `sanitized.mcap` at `data/input/sanitized.mcap` (Section 4, or Section 5 for Docker). |
 | Dashboard shows "No database found" | Run `python scripts/build_database.py --rebuild` first. |
 | `sqlite3`/DBeaver shows an empty or missing-table database | The build didn't complete — rerun `python scripts/build_database.py --rebuild` and check its output for errors. |
-| "Address already in use" / port 8501 busy | Another Streamlit process (local or Docker) is already using it — stop it, run `streamlit run dashboard/app.py --server.port 8502`, or change the host port in `docker-compose.yml`'s `ports:` mapping. |
+| "Address already in use" / port 8501 busy | Another Streamlit process (local or Docker) is already using it — stop it, run `streamlit run dashboard/CUAS_Sentry.py --server.port 8502`, or change the host port in `docker-compose.yml`'s `ports:` mapping. |
 | `ModuleNotFoundError` for a package | Activate the virtual environment (`source .venv/bin/activate`) and run `pip install -r requirements.txt`. |
 | Permission errors writing to `data/output/` | Confirm the directory exists and is writable: `mkdir -p data/output`. |
 | `PRAGMA foreign_key_check` reports violations | Rebuild from scratch: `python scripts/build_database.py --rebuild` — a partial or interrupted build is the most common cause. |
@@ -447,7 +447,7 @@ values embedded as constants anywhere in the ETL or query code.
 2. Run the ETL: `python scripts/build_database.py --rebuild`.
 3. Run validation: `python scripts/run_validation.py`.
 4. Run sample SQL: `python scripts/run_analytics.py --category executive`.
-5. Open the dashboard: `streamlit run dashboard/app.py`, then visit http://localhost:8501.
+5. Open the dashboard: `streamlit run dashboard/CUAS_Sentry.py`, then visit http://localhost:8501.
 6. Run tests: `pytest`.
 7. Read the design documentation: start with [`DESIGN.md`](DESIGN.md) for a concise overview, then `docs/architecture/DATABASE_DESIGN.md`, `docs/architecture/TABLE_GRAIN.md`, and `docs/analytics/ANALYTICAL_INSIGHTS.md` for detail, or browse the full index on the dashboard's Documentation page.
 8. Read `docs/project/AI_USAGE.md` for the AI/code-assistant usage disclosure.

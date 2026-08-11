@@ -33,7 +33,7 @@ explanation.
 python scripts/build_database.py --rebuild
 python scripts/run_validation.py
 python scripts/run_analytics.py --category executive
-streamlit run dashboard/app.py
+streamlit run dashboard/CUAS_Sentry.py
 ```
 
 **Option B — Docker** (no local Python install needed)

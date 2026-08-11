@@ -4,7 +4,7 @@ Not in the originally proposed Stage 8 file list -- added because
 Streamlit's multipage model runs each pages/*.py file as an
 independent script, so the sidebar content (database status, compact
 project overview, navigation) needs to live somewhere every page can
-import without re-triggering dashboard/app.py's own
+import without re-triggering dashboard/CUAS_Sentry.py's own
 st.set_page_config() call. This is the smallest addition that makes
 the sidebar consistent across all pages.
 

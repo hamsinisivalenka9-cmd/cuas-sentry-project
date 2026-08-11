@@ -8,7 +8,7 @@ dashboard/database.py. See docs/DASHBOARD_GUIDE.md for the full
 architecture and read-only guarantees.
 
 Launch with:
-    streamlit run dashboard/app.py
+    streamlit run dashboard/CUAS_Sentry.py
 """
 
 from __future__ import annotations
