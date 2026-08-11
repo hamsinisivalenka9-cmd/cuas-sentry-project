@@ -174,7 +174,7 @@ issues = _run("data_quality_issue_summary", db_mtime=_db_mtime)
 render_table(issues, key="dq_issues")
 query_source_expander(entry_for_name("data_quality_issue_summary"))
 
-with st.expander("What does orphaned_detection_reference mean?"):
+with st.expander("What does orphaned_detection_reference mean?", expanded=True):
     st.markdown(
         "**What caused it:** a `cv_track_states` row references a detection via "
         "`last_associated_detection_id`, but no matching row exists in `cv_detections` "
