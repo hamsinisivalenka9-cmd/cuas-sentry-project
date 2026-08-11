@@ -194,3 +194,12 @@ st.markdown(
        Data Quality page.
     """
 )
+st.caption(
+    "On the CV-incorporation denominator: the prompt's 7,121 number refers to MCAP messages on "
+    "the CV-detection topic, not necessarily 7,121 individual detection objects. Individual nested "
+    "detection entities were modeled at the detection grain, yielding 1,911 distinct detections. "
+    "Using explicit detection-to-track associations, 1,864 of those were incorporated, producing "
+    "97.54%. Other interpretations were tested, the discrepancy is documented, and source lineage "
+    "is preserved so the calculation is reproducible -- the intended denominator should be "
+    "confirmed with the team rather than the logic adjusted to force the expected value."
+)
