@@ -4,36 +4,87 @@ The complete operational guide for this project — setup through
 troubleshooting. For a short project overview, see
 [README.md](README.md).
 
-There are two ways to run this project. Pick one:
+## Fastest Way to Run the Project
 
-## Quick Start — Option A: Local Python (30 seconds)
+This is the fastest way to evaluate the project. No Python install is
+needed, and the database is already built and included — you're
+looking at the dashboard in about a minute.
+
+1. Extract `Hamsini_Sivalenka.zip`.
+2. Open a terminal in the extracted project folder.
+3. Make sure Docker Desktop (or your Docker daemon) is running.
+4. Run:
+
+   ```bash
+   docker compose up --build
+   ```
+
+5. Wait for the database to validate and Streamlit to start — the
+   console will show `Overall validation: PASSED` followed by the
+   Streamlit startup banner.
+6. Open the dashboard: **http://localhost:8501**
+7. When finished:
+
+   ```bash
+   docker compose down
+   ```
+
+What's happening, in plain terms:
+
+- `sanitized.mcap` is already included at `data/input/` — the source
+  recording.
+- `sentry.db` is already included at `data/output/` — the prebuilt
+  database.
+- Docker builds the application's environment (Python + dependencies).
+- The included `sentry.db` is detected and **validated**, not rebuilt
+  — rebuilding from scratch is optional (see below).
+- Streamlit starts automatically once validation passes.
+- The dashboard becomes available at http://localhost:8501.
+
+**You do not need to rebuild the database just to explore the
+project** — it's already there.
+
+## Rebuild the Database from MCAP (optional)
+
+Optional. This demonstrates the complete ETL pipeline by discarding
+the included database and decoding `sanitized.mcap` from scratch.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-python scripts/build_database.py --rebuild
-python scripts/run_validation.py
-python scripts/run_analytics.py --category executive
-
-streamlit run dashboard/app.py
-```
-
-Open the dashboard: **http://localhost:8501**
-
-## Quick Start — Option B: Docker (no Python install needed)
-
-```bash
+docker compose down
+rm -f data/output/sentry.db
 docker compose up --build
 ```
 
-Open the dashboard: **http://localhost:8501**. Full walkthrough,
-including what's happening under the hood, in Section 5.
+- Only `data/output/sentry.db` is deleted — **`data/input/sanitized.mcap`
+  is not touched.**
+- Docker detects the missing database on startup.
+- The ETL reads `sanitized.mcap` and decodes it into a new `sentry.db`.
+- Database validation runs automatically, the same as on first start.
+- Streamlit starts, and the dashboard uses the newly rebuilt database.
 
-Either option gets the whole project running end to end. Everything
-below explains each step in more detail, plus how to explore the
-database and evaluate the results.
+**Do not delete `data/input/sanitized.mcap`.** It is the original
+source recording — only `data/output/sentry.db` should ever be
+deleted, and only if you want to demonstrate a fresh rebuild.
+
+## Project Navigation
+
+| Path | What it is |
+|---|---|
+| `README.md` | Project overview. |
+| `DESIGN.md` | Architecture and key design decisions. |
+| `START_HERE.md` | This file — execution instructions. |
+| `dashboard/` | The Streamlit dashboard. |
+| `src/` | The ETL implementation. |
+| `sql/` | Schema, indexes, views, and validation SQL. |
+| `queries/` | The analytical SQL query library. |
+| `tests/` | The automated test suite. |
+| `docs/` | Deeper technical documentation and development history. |
+
+## Other ways to run this project
+
+Prefer running locally without Docker, or want the full step-by-step
+guide (including how to open the database directly, run individual
+SQL files, and troubleshoot)? Continue reading below.
 
 | Task | Approximate time |
 |---|---|
@@ -156,21 +207,10 @@ local Python path instead, skip to Section 6.
 
 ### Setup
 
-1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and make sure it's running.
-2. Place the source recording at `data/input/sanitized.mcap` (same
-   requirement as Section 4 — not committed to Git).
-3. From the repository root:
-
-   ```bash
-   docker compose up --build
-   ```
-
-4. Open **http://localhost:8501**.
-5. Stop with:
-
-   ```bash
-   docker compose down
-   ```
+See "Fastest Way to Run the Project" at the top of this document for
+the exact steps — install Docker Desktop, make sure it's running, then
+`docker compose up --build` from the repository root. Stop with
+`docker compose down`.
 
 ### What happens on startup
 
@@ -203,12 +243,10 @@ ever exist in the host-mounted `data/` folder.
 
 ### Rebuilding
 
-- Code changed? `docker compose up --build` — only rebuilds the image
-  layers that changed.
-- Want to force a full data rebuild inside the container? Delete
-  `data/output/sentry.db` on the host, then run `docker compose up --build`
-  again — startup will detect the missing database and rebuild it
-  from `data/input/sanitized.mcap`, the same as a fresh first run.
+Code changed? `docker compose up --build` — only rebuilds the image
+layers that changed. To force a full data rebuild from the source
+MCAP file, see "Rebuild the Database from MCAP" near the top of this
+document.
 
 ## 6. Build the database
 
