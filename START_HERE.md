@@ -376,7 +376,9 @@ sqlite3 data/output/sentry.db "PRAGMA foreign_key_check;"
    DBeaver may prompt to download the SQLite JDBC driver on first
    connection; allow it.
 3. **Finish**, then expand the connection in the Database Navigator to
-   browse all 11 tables and 3 views.
+   browse all 12 tables (11 analytical tables plus `schema_version`,
+   a metadata table recording the schema's version — see Section 13)
+   and 3 views.
 4. To run a query: open a SQL Editor on this connection, then either
    paste SQL from any file under `queries/`, or open a `.sql` file
    directly and execute it (`Ctrl+Enter` / `Cmd+Enter`).
@@ -424,7 +426,7 @@ configured in this project — `pytest` is the only automated check.
 
 ## 13. Expected outputs
 
-- ✓ **SQLite database generated** — `data/output/sentry.db` (11 tables, 3 views)
+- ✓ **SQLite database generated** — `data/output/sentry.db` (12 tables — 11 analytical tables plus `schema_version`, a metadata table recording the schema's version — and 3 views)
 - ✓ **Validation passes** — `python scripts/run_validation.py` exits 0, prints `PASS` for every check
 - ✓ **All tests pass** — `pytest` reports 274/274 passing
 - ✓ **Dashboard launches successfully** — every page loads at http://localhost:8501 without error

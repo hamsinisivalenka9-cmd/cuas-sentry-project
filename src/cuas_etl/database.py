@@ -35,8 +35,10 @@ SCHEMA_VERSION_DESCRIPTION = (
 
 # The 11 tables docs/TABLE_GRAIN.md and docs/DATABASE_DESIGN.md describe
 # and approved. `schema_version` is deliberately excluded: it is
-# implementation-layer metadata added in Stage 6, not one of the 10
-# reviewed analytical tables.
+# implementation-layer metadata added in Stage 6, not one of these 11
+# reviewed analytical tables. (The database therefore has 12 tables in
+# total -- 11 analytical plus schema_version -- which is what raw
+# sqlite_master introspection, e.g. the dashboard's table count, reports.)
 REVIEWED_TABLES: tuple[str, ...] = (
     "source_messages",
     "cv_detections",

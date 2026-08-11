@@ -60,7 +60,7 @@ metadata = database.get_database_metadata(DEFAULT_DB_PATH)
 checksum = database.compute_source_mcap_checksum()
 cols = st.columns(4)
 cols[0].metric("Schema version", metadata.schema_version)
-cols[1].metric("Tables", metadata.table_count)
+cols[1].metric("Tables", metadata.table_count, help="11 analytical tables plus schema_version (schema metadata).")
 cols[2].metric("Views", metadata.view_count)
 cols[3].metric("Analytical queries", len(sql_loader.discover_queries()))
 cols = st.columns(4)
@@ -173,3 +173,29 @@ st.caption("Findings the ETL pipeline itself recorded and chose not to silently 
 issues = _run("data_quality_issue_summary", db_mtime=_db_mtime)
 render_table(issues, key="dq_issues")
 query_source_expander(entry_for_name("data_quality_issue_summary"))
+
+with st.expander("What does orphaned_detection_reference mean?"):
+    st.markdown(
+        "**What caused it:** a `cv_track_states` row references a detection via "
+        "`last_associated_detection_id`, but no matching row exists in `cv_detections` "
+        "for that id. 4 such references exist in the source recording.\n\n"
+        "**Why a warning, not a fatal error:** `cv_detection_track_links.detection_id` "
+        "is a real, enforced foreign key (`PRAGMA foreign_keys = ON`). Inserting these 4 "
+        "pairs would violate it, so the ETL logs them here instead of failing the whole "
+        "load over 4 dangling references out of 1,911 detections and 9,496 track-state "
+        "restatements.\n\n"
+        "**What happened to the rows:** nothing was silently dropped (CLAUDE.md rule 12). "
+        "The underlying `cv_track_states` row is kept as-is, with its original "
+        "`last_associated_detection_id` value intact. Only the *derived bridge row* in "
+        "`cv_detection_track_links` is omitted for that one pairing -- and the omission "
+        "itself is recorded as one of these 4 warning rows, with the exact `detection_id`/"
+        "`track_id` preserved in the finding.\n\n"
+        "**Why it doesn't invalidate the analytical results:** this affects at most 4 of "
+        "the 1,864 CV detection-to-track associations (0.2%) -- everywhere else in this "
+        "dashboard, `cv_detection_track_links` is exactly the reconciled table these 4 "
+        "exclusions were built for, so downstream numbers already reflect this decision "
+        "rather than being silently wrong. `scripts/run_validation.py`'s "
+        "`orphan_reference_reconciliation` check independently re-derives the same count "
+        "of 4 from the raw data on every validation run. Full detail: "
+        "`docs/data/DATA_CLEANING.md`, Section 6."
+    )

@@ -16,7 +16,7 @@ extracted and re-run independently to confirm it is complete.
 | Deliverable | Status | Where |
 |---|---|---|
 | MCAP → SQLite ETL pipeline | Present, working | `src/cuas_etl/`, `scripts/build_database.py` |
-| Relational SQLite schema (11 tables, 3 views) | Present | `sql/schema.sql`, `sql/views.sql` |
+| Relational SQLite schema (12 tables — 11 analytical + `schema_version`, 3 views) | Present | `sql/schema.sql`, `sql/views.sql` |
 | Primary/foreign keys, `PRAGMA foreign_keys = ON` | Present, enforced | `sql/schema.sql`, `src/cuas_etl/database.py` |
 | Analytical SQL (22 queries) | Present, all discoverable/runnable | `queries/`, `scripts/run_analytics.py` |
 | Automated tests | Present, 274/274 passing | `tests/` |

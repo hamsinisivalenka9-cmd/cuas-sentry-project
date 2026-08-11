@@ -41,7 +41,7 @@ def render_sidebar() -> None:
             f"**Path:** `{metadata.db_path.relative_to(metadata.db_path.parent.parent.parent)}`  \n"
             f"**Size:** {formatting.format_bytes(metadata.size_bytes)}  \n"
             f"**Schema version:** {metadata.schema_version}  \n"
-            f"**Tables:** {metadata.table_count}  \n"
+            f"**Tables:** {metadata.table_count} (11 analytical + `schema_version`)  \n"
             f"**Views:** {metadata.view_count}  \n"
             f"**Analytical queries:** {len(sql_loader.discover_queries())}  \n"
             f"**SQLite:** {metadata.sqlite_version}"
