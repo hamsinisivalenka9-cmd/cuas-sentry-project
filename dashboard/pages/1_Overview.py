@@ -82,8 +82,7 @@ kpi_row(
             "CV incorporation",
             formatting.format_percentage(incorporation["incorporation_percentage"].iloc[0]),
             "Distinct incorporated detections divided by total detections. Target ~81% per the "
-            "assignment; Anduril reviewed and confirmed this 97.54% interpretation is correct and "
-            "closed the investigation. See docs/CHECKSUM_RESOLUTION.md.",
+            "assignment; this dataset computes 97.54%. See docs/analytics/CHECKSUM_RESOLUTION.md.",
         ),
         (
             "Drone mean duration",
@@ -179,8 +178,8 @@ st.subheader("Key findings")
 st.caption("Summarized from docs/ANALYTICAL_INSIGHTS.md. The numbers here are the same ones rendered live above.")
 st.markdown(
     """
-    1. CV incorporation is 97.54%, not the assignment's ~81% target. Anduril reviewed the
-       investigation and confirmed this interpretation is correct.
+    1. CV incorporation is 97.54%, not the assignment's ~81% target -- see
+       docs/analytics/CHECKSUM_RESOLUTION.md for the full investigation.
     2. Drone/Airplane is answered by sensor provenance, not object classification. Airplane
        mean is within 2.4% of target; Drone mean is reported at +19.5% above target (median is
        closer but is not substituted for the mean).

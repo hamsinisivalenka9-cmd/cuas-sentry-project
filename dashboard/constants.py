@@ -35,7 +35,7 @@ CATEGORY_LABELS: dict[str, str] = {
 # what the corresponding SQL query returns. These constants exist
 # solely to label the documented caveats in the UI, not to override or
 # recompute anything.
-CV_INCORPORATION_TARGET_PCT = "~81% (assignment target -- not reproduced from source data; Anduril confirmed the 97.54% interpretation and closed the investigation, see docs/CHECKSUM_RESOLUTION.md)"
+CV_INCORPORATION_TARGET_PCT = "~81% (assignment target -- not reproduced from source data; this dataset computes 97.54%, see docs/analytics/CHECKSUM_RESOLUTION.md)"
 DRONE_DURATION_TARGET = "~30 seconds (target)"
 AIRPLANE_DURATION_TARGET = "~600 seconds (target)"
 
