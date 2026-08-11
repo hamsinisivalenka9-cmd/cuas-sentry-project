@@ -1,5 +1,9 @@
 # CUAS Sentry Data Engineering Assessment
 
+> **To run this project, go to [START_HERE.md](START_HERE.md).** It
+> has the fastest path to a running dashboard, plus full setup
+> instructions.
+
 A local Python ETL pipeline that turns a raw counter-UAS (drone
 detection) sensor recording into a queryable SQLite database, a
 library of analytical SQL, and a small interactive dashboard. It reads
